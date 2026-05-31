@@ -2422,127 +2422,156 @@
   //  三件套：swing骨架(段在不在/坏没坏) + 量能(真假续航) + 动能(拐点提前量)。
   // ══════════════════════════════════════════════════════════════════
   function _phaseEngine(pool) {
-    const res = { confirmed: false, trendDir: null, phase: 'none', retraceType: null,
-                  contBias: 0, suppress: false, suggestExpiry: null, evidence: [], label: '' };
+    // v3.13 重写（依五本书核心：趋势延续/回踩/反转 由 斜率结构+动能+量能 三维加权投票决定）
+    //   关键修复：方向不再死锁在15M/30M。高周期=背景偏向(顺风/逆风)；执行周期(5M)解析"当前可交易方向"。
+    //   执行周期决定性逆背景(结构破位/放量同向+合力强) → 反转确认，顺执行周期方向(可反手)。
+    //   回踩"进行中"=观望(等结束)，回踩"结束"=强顺势(短周期可入)。不搞硬共振，用加权分竞争。
+    const res = { confirmed: false, trendDir: null, bgDir: null, tradeDir: null,
+                  phase: 'none', retraceType: null, contBias: 0, suppress: false,
+                  suggestExpiry: null, evidence: [], label: '', scores: null, trendSign: 0 };
     if (!pool) return res;
     const f1 = pool['1m'], f5 = pool['5m'], f15 = pool['15m'], f30 = pool['30m'];
+    if (!f15 || !f30 || !(f5 || f1)) { res.label = '数据不足'; return res; }
     const biasSign = (tb) => tb === 'bullish' ? 2 : tb === 'mild_bullish' ? 1
                           : tb === 'bearish' ? -2 : tb === 'mild_bearish' ? -1 : 0;
 
-    // ① 趋势确认（v3.12.3）：15M+30M trendBias 同向 且 满足以下三条之一
-    //   A. 15M ADX≥22（放宽原25门槛，加密市场ADX滞后明显）
-    //   B. 5M连续≥4根同向K线且实体比≥0.55（动量直接判断）
-    //   C. 5M有impulse_up/down触发且放量≥1.2倍（突破确认）
-    if (!f15 || !f30) return res;
+    // ── 背景偏向(15M+30M)：决定顺风/逆风，不再独占方向 ──
     const s15 = biasSign(f15.trendBias), s30 = biasSign(f30.trendBias);
-    if (s15 === 0 || s30 === 0) { res.label = '趋势未确认(高周期方向中性)'; return res; }
-    if ((s15 > 0) !== (s30 > 0)) { res.label = '趋势未确认(15M/30M方向不一致)'; return res; }
-    const adxConfirm = isFinite(f15.adx) && f15.adx >= 22;
-    const ex0 = f5 || f1;
-    const momentumConfirm = !!(ex0 &&
-      (ex0.barsDirection5 === 'up' || ex0.barsDirection5 === 'down') &&
-      isFinite(ex0.bodyRatio) && ex0.bodyRatio >= 0.55);
-    const breakoutConfirm = !!(ex0 &&
-      Array.isArray(ex0.triggerFlags) &&
-      (ex0.triggerFlags.includes('impulse_up') || ex0.triggerFlags.includes('impulse_down')) &&
-      isFinite(ex0.volRatio) && ex0.volRatio >= 1.2);
-    if (!adxConfirm && !momentumConfirm && !breakoutConfirm) {
-      res.label = '趋势未确认(ADX弱且无动量/突破信号)'; return res;
-    }
-    res.confirmed = true;
-    const dir = s15 > 0 ? 'bullish' : 'bearish';
-    res.trendDir = dir;
-    const down = dir === 'bearish';
-    const trendSign = down ? -1 : 1;
+    const bgSign = s15 + s30;
+    const bgDir = bgSign >= 3 ? 'bullish' : bgSign > 0 ? 'mild_bullish'
+                : bgSign <= -3 ? 'bearish' : bgSign < 0 ? 'mild_bearish' : 'neutral';
+    res.bgDir = bgDir;
 
-    const ex = f5 || f1;   // 执行周期：结构/伸展
-    const tr = f1 || f5;   // 触发周期：即时确认
-    if (!ex || !tr) { res.confirmed = false; return res; }
+    const ex = f5 || f1;   // 执行周期(主)：结构/动能/量能
+    const tr = f1 || f5;   // 触发周期(辅)：即时确认
     const sw = ex.swing || {};
+    const fl = ex.triggerFlags || [];
+    const flT = tr.triggerFlags || [];
+    const moveUp = (ex.barsDirection3 === 'up' || ex.barsDirection3 === 'mostly_up');
+    const moveDn = (ex.barsDirection3 === 'down' || ex.barsDirection3 === 'mostly_down');
 
-    // 伸展度（顺势方向离EMA21多远，单位ATR）
+    // ════ 三维加权评分(正=多/负=空)：斜率结构 S + 动能 M + 量能 V ════
+    // ① 斜率/结构 S —— Brooks "always-in" 骨架，权重最高（趋势是否延续/破坏看这里）
+    let S = 0; const sEv = [];
+    if (sw.structure === 'up') { S += 2; sEv.push('5M结构HH/HL'); }
+    else if (sw.structure === 'down') { S -= 2; sEv.push('5M结构LH/LL'); }
+    if (ex.barsDirection5 === 'up') S += 2;
+    else if (ex.barsDirection5 === 'mostly_up') S += 1;
+    else if (ex.barsDirection5 === 'down') S -= 2;
+    else if (ex.barsDirection5 === 'mostly_down') S -= 1;
+    if (ex.trendBias === 'bullish') S += 1; else if (ex.trendBias === 'bearish') S -= 1;
+    if (sw.brokePrevLow)  { S -= 1; sEv.push('跌破前低'); }
+    if (sw.brokePrevHigh) { S += 1; sEv.push('升破前高'); }
+    if (sw.slopeFlatten)  { S = S * 0.6; sEv.push('斜率走平'); }
+
+    // ② 动能 M —— 拐点提前量（背离=对当前移动的反向预警）
+    let M = 0; const mEv = [];
+    if (isFinite(ex.macdHist)) M += ex.macdHist > 0 ? 1 : ex.macdHist < 0 ? -1 : 0;
+    if (isFinite(f1.macdHist)) M += f1.macdHist > 0 ? 0.5 : f1.macdHist < 0 ? -0.5 : 0;
+    if (isFinite(ex.rsi)) { if (ex.rsi > 55) M += 1; else if (ex.rsi < 45) M -= 1; }
+    if (ex.momDivergence === 'bear' || tr.momDivergence === 'bear') { M -= 1; mEv.push('顶背离'); }
+    if (ex.momDivergence === 'bull' || tr.momDivergence === 'bull') { M += 1; mEv.push('底背离'); }
+    const st = tr.stochTurn || ex.stochTurn;
+    if (st === 'up_from_oversold') { M += 1; mEv.push('StochRSI超卖金叉'); }
+    else if (st === 'down_from_overbought') { M -= 1; mEv.push('StochRSI超买死叉'); }
+    else if (st === 'cross_up') M += 0.5;
+    else if (st === 'cross_down') M -= 0.5;
+
+    // ③ 量能 V —— VPA：确认当前这一段移动是否有量支撑（放量同向=真，缩量=无需求/无供给）
+    let V = 0; const vEv = [];
+    if (ex.volRegime === 'expanding') {
+      if (moveUp) { V += 1.5; vEv.push('放量推升'); }
+      else if (moveDn) { V -= 1.5; vEv.push('放量下杀'); }
+    } else if (ex.volRegime === 'contracting') {
+      if (moveUp) { V -= 0.5; vEv.push('上涨缩量(无需求)'); }
+      else if (moveDn) { V += 0.5; vEv.push('下跌缩量(抛压减弱)'); }
+    }
+    if (isFinite(ex.obvSlope)) V += ex.obvSlope > 0 ? 0.5 : ex.obvSlope < 0 ? -0.5 : 0;
+
+    const opScore = Number((S + M + V).toFixed(1));   // 执行周期"可交易方向"合力
+    const opDir = opScore >= 2.5 ? 'bullish' : opScore <= -2.5 ? 'bearish' : 'neutral';
+    res.scores = { S: Number(S.toFixed(1)), M: Number(M.toFixed(1)), V: Number(V.toFixed(1)), op: opScore, bg: bgSign };
+
+    if (bgDir === 'neutral') {
+      res.label = '高周期方向中性，观望'; res.evidence = sEv.concat(mEv, vEv); return res;
+    }
+    const bgUp = bgSign > 0;
+    const agreesBg  = (bgUp && opScore > 0) || (!bgUp && opScore < 0);
+    const opposesBg = (bgUp && opScore < 0) || (!bgUp && opScore > 0);
+
+    // 伸展/极值（力竭判定料）
     const dEma = ex.dist && isFinite(ex.dist.ema21_atr) ? ex.dist.ema21_atr : null;
-    const stretchTrend = dEma != null && (down ? dEma <= -1.5 : dEma >= 1.5);
+    const stretch = dEma != null && (bgUp ? dEma >= 1.5 : dEma <= -1.5);
     const bbP = isFinite(ex.bbPct) ? ex.bbPct : (isFinite(tr.bbPct) ? tr.bbPct : null);
-    const atTrendBand   = bbP != null && (down ? bbP <= 0.12 : bbP >= 0.88); // 顺势那侧轨(下跌→下轨)
-    const atCounterBand = bbP != null && (down ? bbP >= 0.85 : bbP <= 0.15); // 逆势那侧轨(下跌→上轨)
+    const atTrendExtreme = bbP != null && (bgUp ? bbP >= 0.85 : bbP <= 0.15);
+    const atCounterBand  = bbP != null && (bgUp ? bbP <= 0.15 : bbP >= 0.85);
 
-    // 衰竭信号（顺势力竭，反弹将至）
-    const exhaustion = [];
-    if (down) {
-      if (ex.momDivergence === 'bull' || tr.momDivergence === 'bull') exhaustion.push('底背离');
-      if (tr.stochTurn === 'up_from_oversold') exhaustion.push('1M StochRSI超卖金叉');
+    const exhaustSignals = [];
+    if (bgUp) {
+      if (ex.momDivergence === 'bear' || tr.momDivergence === 'bear') exhaustSignals.push('顶背离');
+      if (st === 'down_from_overbought') exhaustSignals.push('StochRSI超买死叉');
     } else {
-      if (ex.momDivergence === 'bear' || tr.momDivergence === 'bear') exhaustion.push('顶背离');
-      if (tr.stochTurn === 'down_from_overbought') exhaustion.push('1M StochRSI超买死叉');
+      if (ex.momDivergence === 'bull' || tr.momDivergence === 'bull') exhaustSignals.push('底背离');
+      if (st === 'up_from_oversold') exhaustSignals.push('StochRSI超卖金叉');
     }
-    if (ex.volRegime === 'contracting') exhaustion.push('顺势缩量(动能枯竭)');
-    if (sw.slopeFlatten) exhaustion.push('推进斜率走平');
+    if (ex.volRegime === 'contracting') exhaustSignals.push('顺势缩量');
+    if (sw.slopeFlatten) exhaustSignals.push('斜率走平');
 
-    // 逆势推进（回踩正在进行）：触发周期朝逆势方向走
-    const b3 = tr.barsDirection3, fl = tr.triggerFlags || [];
-    const counterMove = down
-      ? (b3 === 'up' || b3 === 'mostly_up' || fl.includes('reclaim_ema21') || fl.includes('reclaim_vwap'))
-      : (b3 === 'down' || b3 === 'mostly_down' || fl.includes('lose_ema21') || fl.includes('lose_vwap'));
+    // 回踩结束：逆势波动后，触发周期重新转回顺背景方向（价格动作确认，非仅指标）
+    const resumeBg = bgUp
+      ? (fl.includes('lower_wick_reject') || flT.includes('lower_wick_reject') || ex.engulfing === 'bullish' || tr.engulfing === 'bullish' || st === 'up_from_oversold')
+      : (fl.includes('upper_wick_reject') || flT.includes('upper_wick_reject') || ex.engulfing === 'bearish' || tr.engulfing === 'bearish' || st === 'down_from_overbought');
 
-    const stochEarlyWarn = down
-      ? (tr.stochTurn === 'down_from_overbought' || tr.stochTurn === 'cross_down')
-      : (tr.stochTurn === 'up_from_oversold' || tr.stochTurn === 'cross_up');
+    // 反转确认：执行周期决定性逆背景（结构破位 或 逆背景放量），且合力强 → 顺执行周期反手
+    const structFlip = bgUp ? (sw.brokePrevLow === true) : (sw.brokePrevHigh === true);
+    const volFlip = ex.volRegime === 'expanding' && (bgUp ? moveDn : moveUp);
+    const strongOp = Math.abs(opScore) >= 6;
+    const reversalConfirmed = opposesBg && strongOp && (structFlip || volFlip);
 
-    // 回踩结束（价格在逆势极值处确认顺势恢复）
-    // v3.12.1：StochRSI只做早期预警，不再单独触发回踩结束，必须有价格动作确认。
-    const resume = down
-      ? (fl.includes('upper_wick_reject') || ex.engulfing === 'bearish' || tr.engulfing === 'bearish')
-      : (fl.includes('lower_wick_reject') || ex.engulfing === 'bullish' || tr.engulfing === 'bullish');
+    const setDir = (d) => { res.trendDir = d; res.tradeDir = d; res.trendSign = d === 'bullish' ? 1 : d === 'bearish' ? -1 : 0; };
+    const refDir = bgUp ? 'bullish' : 'bearish';
 
-    // 回踩 vs 反转 判别料
-    const structBroken = down ? (sw.brokePrevHigh === true) : (sw.brokePrevLow === true);
-    const counterVolExpanding = ex.volRegime === 'expanding';
-    const counterVolHealthy = ex.volRegime !== 'expanding';
-    const hi = f30 || f15;
-    const hiMomReversing = !!(hi && isFinite(hi.macdHist)
-        && (down ? hi.macdHist > 0 : hi.macdHist < 0)               // 高周期柱已转到逆势侧
-        && (down ? biasSign(hi.trendBias) > -2 : biasSign(hi.trendBias) < 2)); // 高周期趋势偏置已不再强顺势
-
-    // ── 相位判定（优先级从高到低）──
-    if ((atTrendBand || stretchTrend) && exhaustion.length >= 1) {
-      // 力竭区：顺势那侧已极值 + 衰竭信号 → 反弹将至，禁止在底/顶部追延续
-      res.phase = 'exhaustion'; res.suppress = true;
-      res.contBias = exhaustion.length >= 2 ? -3 : -2;
-      res.suggestExpiry = null;
-      res.evidence = ['伸展到顺势极值', ...exhaustion];
-      res.label = '力竭区(反弹将至，顺势延续单观望)';
-    } else if (atCounterBand && resume) {
-      // 回踩结束：价格在逆势极值处拒绝并转回顺势 → 强顺势
-      res.phase = 'retrace_end'; res.contBias = 3; res.suggestExpiry = 10;
-      res.evidence = ['价格在逆势极值处拒绝', stochEarlyWarn ? 'StochRSI提前预警后价格确认' : '价格确认顺势恢复'];
-      res.label = '回踩结束(强顺势恢复)';
-    } else if (counterMove || (atCounterBand && stochEarlyWarn)) {
-      // 回踩进行中 → 判回踩还是反转
-      if (structBroken || (counterVolExpanding && hiMomReversing)) {
-        res.phase = 'reversal_risk'; res.retraceType = 'reversal'; res.suppress = true;
-        res.contBias = -2; res.suggestExpiry = null;
-        res.evidence = [structBroken ? '结构被打破(吃掉前' + (down ? '高' : '低') + ')' : '逆势放量+高周期动能转向'];
-        res.label = '疑似反转(顺势延续单观望)';
-      } else {
-        res.phase = 'retrace_progress'; res.retraceType = 'pullback'; res.contBias = 1;
-        res.suggestExpiry = atCounterBand ? 30 : 15; // 回踩越深，期限越长
-        res.evidence = [
-          '结构未破' + (down ? '(仍LH)' : '(仍HL)'),
-          counterVolHealthy ? '回踩量能未放大' : '回踩量能偏强，延长期限处理',
-          stochEarlyWarn ? 'StochRSI仅作早期预警' : '等待价格确认回踩结束'
-        ];
-        res.label = atCounterBand
-          ? '深回踩进行中·判定回踩(可顺势追，但优先30M期限)'
-          : '回踩进行中·判定回踩(可顺势追，拉长到15/30M)';
-      }
+    if (agreesBg && (atTrendExtreme || stretch) && exhaustSignals.length >= 2) {
+      // 力竭区：顺背景已极值 + ≥2项衰竭 → 观望（防追顶/底）。要求2项以避免过度抑制。
+      res.confirmed = true; res.phase = 'exhaustion'; res.suppress = true;
+      res.trendDir = refDir; res.tradeDir = null; res.trendSign = 0;
+      res.contBias = -3; res.suggestExpiry = null;
+      res.evidence = ['伸展到顺势极值'].concat(exhaustSignals);
+      res.label = '力竭区(反弹/回落将至，顺势单观望)';
+    } else if (reversalConfirmed) {
+      // 反转确认：顺执行周期方向（可反手），有迹可循=结构破位/放量+合力强
+      res.confirmed = true; res.phase = 'reversal_confirmed'; res.retraceType = 'reversal'; res.suppress = false;
+      setDir(opDir); res.contBias = 2; res.suggestExpiry = 10;
+      res.evidence = [(bgUp ? '上涨背景但5M决定性转空' : '下跌背景但5M决定性转多'),
+                      structFlip ? '执行周期结构破位' : '逆背景放量'].concat(mEv.slice(0, 2));
+      res.label = '反转确认(顺执行周期方向，可反手)';
+    } else if (opposesBg && resumeBg && (atCounterBand || Math.abs(opScore) <= 4)) {
+      // 回踩结束：逆势波动收尾，价格重回顺背景 → 强顺势（短周期可用）
+      res.confirmed = true; res.phase = 'retrace_end'; res.retraceType = 'pullback_end';
+      setDir(refDir); res.contBias = 3; res.suggestExpiry = 10;
+      res.evidence = ['回踩末端价格重回顺势', '出现顺势拒绝/吞没/StochRSI转向'];
+      res.label = '回踩结束(强顺势恢复，短周期可入)';
+    } else if (opposesBg) {
+      // 回踩进行中(未确认反转、未结束) → 观望，等回踩结束信号(Brooks：入场在恢复K，不在回踩途中)。
+      //   这是修复"上涨趋势里一路看涨、回踩全亏"的核心：回踩途中不再顺势接刀。
+      res.confirmed = true; res.phase = 'retrace_progress'; res.retraceType = 'pullback'; res.suppress = true;
+      res.trendDir = refDir; res.tradeDir = null; res.trendSign = 0;
+      res.contBias = 0; res.suggestExpiry = null;
+      res.evidence = ['逆背景波动进行中', structFlip ? '已破位，警惕转为反转' : '结构未破', '等回踩结束/反转确认再动手'];
+      res.label = '回踩进行中(观望，等回踩结束或反转确认)';
+    } else if (agreesBg && Math.abs(opScore) >= 2.5) {
+      // 推进段：执行周期与背景同向且合力足
+      res.confirmed = true; res.phase = 'impulse';
+      setDir(refDir); res.contBias = 2; res.suggestExpiry = 10;
+      res.evidence = ['执行周期与背景同向推进'].concat(sEv.slice(0, 2), vEv.slice(0, 1));
+      res.label = '推进段(顺势，回撤后入场勿追顶/底)';
     } else {
-      // 推进段
-      res.phase = 'impulse'; res.contBias = 2; res.suggestExpiry = 5;
-      res.evidence = ['顺势推进', '未过度伸展'];
-      res.label = '推进段(正常顺势)';
+      // 合力不足(|op|<2.5) → 方向不清，观望
+      res.confirmed = false; res.phase = 'unclear';
+      res.trendDir = refDir; res.tradeDir = null; res.trendSign = 0; res.suggestExpiry = null;
+      res.evidence = ['执行周期合力不足(op=' + opScore + ')，方向不清'];
+      res.label = '方向不清(观望)';
     }
-    res.trendSign = trendSign;
     return res;
   }
 
@@ -2588,8 +2617,8 @@
         v -= c.no_trade_reasons.length * 1.5;   // 禁入原因惩罚加重
         if (c.risk_score >= 3) v -= 2;           // 高风险额外惩罚
         if (c.trigger_score > 0) v += 0.5;       // 有触发信号小幅加分
-        if (_phase && _phase.suppress) v -= 8;   // 力竭/疑似反转：重罚高分候选(防把追顶/追底排第一；真正否决在裁判G0)
-        if (_phase && _phase.retraceType === 'pullback' && c.expiry >= 15) v += 1.5; // 健康回撤奖励长期限
+        if (_phase && _phase.suppress) v -= 8;   // 力竭/回踩进行中：重罚高分候选(防追顶底/回踩接刀；真正否决在裁判G0)
+        if (_phase && _phase.phase === 'retrace_end' && c.expiry <= 10) v += 1; // 回踩结束：短周期顺势可入
         return v;
       };
       return quality(b) - quality(a);
@@ -2619,35 +2648,33 @@
     // v3.12: 相位引擎调整。趋势确认时，按相位对"顺势方向"的总分做加减，
     //   并按相位给期限；力竭/反转相位把延续分压向中性（不反向，只压制）。
     //   （_phase 已在 best 排序前计算，此处复用）
+    // v3.13 相位调整：按"可交易方向 tradeDir"(可能反手做空)对总分加减，而非死锁的高周期趋势。
+    //   suppress(力竭/回踩进行中)→分数收向中性(观望)；反转确认→朝执行周期方向加分。
     let _totalScore3 = _baseTotal;
     let _phaseNote = '';
-    if (_phase.confirmed) {
-      const ts = _phase.trendSign; // +1多 / -1空
-      if (_phase.contBias > 0) {
-        // 顺势加分（推进/回踩结束/健康回踩）
-        _totalScore3 = _baseTotal + ts * _phase.contBias;
-        _phaseNote = '相位[' + _phase.label + ']→顺势' + (ts > 0 ? '看涨' : '看跌') + '加分' + _phase.contBias;
-      } else if (_phase.contBias < 0) {
-        // 压制：把顺势方向的分朝中性收，不overshoot到反向
-        const cut = Math.min(Math.abs(_baseTotal), Math.abs(_phase.contBias) + 1);
-        _totalScore3 = _baseTotal - ts * cut; // 抵消顺势分，趋近0
-        _phaseNote = '相位[' + _phase.label + ']→压制顺势延续(分数收向中性)';
-      } else {
-        _phaseNote = '相位[' + _phase.label + ']';
-      }
+    if (_phase.confirmed && _phase.tradeDir) {
+      const ts = _phase.trendSign; // tradeDir 的符号：+1看涨 / -1看跌（反转确认时即执行周期方向）
+      _totalScore3 = _baseTotal + ts * _phase.contBias;
+      _phaseNote = '相位[' + _phase.label + ']→' + (ts > 0 ? '看涨' : '看跌') + '加分' + _phase.contBias
+                 + (_phase.scores ? '（执行周期合力op=' + _phase.scores.op + '|S' + _phase.scores.S + '/M' + _phase.scores.M + '/V' + _phase.scores.V + '）' : '');
+    } else if (_phase.confirmed && _phase.suppress) {
+      // 力竭/回踩进行中：把高周期方向的基础分朝中性收，避免在观望相位仍给强方向分
+      const refSign = _phase.trendDir === 'bullish' ? 1 : _phase.trendDir === 'bearish' ? -1 : 0;
+      const cut = Math.min(Math.abs(_baseTotal), 3);
+      _totalScore3 = _baseTotal - refSign * cut;
+      _phaseNote = '相位[' + _phase.label + ']→观望(分数收向中性)';
     } else {
-      _phaseNote = _phase.label || '趋势未确认，相位模型不介入';
+      _phaseNote = _phase.label || '方向不清，相位模型不介入';
     }
 
-    // 期限：相位优先；相位无建议时回落到总分启发
-    const _expirySuggest = (_phase.confirmed && _phase.suggestExpiry)
-      ? (_phase.suggestExpiry + '分钟（相位：' + _phase.label + '）')
-      : (_phase.confirmed && _phase.suppress)
+    // 期限：相位优先；suppress→观望；有 tradeDir 用其建议期限；否则回落总分启发
+    const _expirySuggest = (_phase.confirmed && _phase.suppress)
       ? '观望（相位：' + _phase.label + '）'
-      : _totalScore3 >= 4 ? '15/30分钟（信号强，可选更长期限）'
-      : _totalScore3 >= 2 ? '10/15分钟（信号中等）'
-      : _totalScore3 <= -2 ? '观望或反向'
-      : '5/10分钟（信号弱，期限短降低风险）';
+      : (_phase.confirmed && _phase.tradeDir && _phase.suggestExpiry)
+      ? (_phase.suggestExpiry + '分钟（相位：' + _phase.label + '）')
+      : Math.abs(_totalScore3) >= 4 ? '15/30分钟（信号强）'
+      : Math.abs(_totalScore3) >= 2 ? '10/15分钟（信号中等）'
+      : '观望（信号不足）';
 
     const layeredScore = {
       bias1h:    _bias1h,
@@ -2662,10 +2689,10 @@
     };
 
     const agentViews = {
-      historian_focus: '优先比较 相位(layered_score.phase) 是否相同——力竭/回踩/推进相位不同则历史不可比；再比 trendBias、量能regime、动能背离、与关键位距离',
-      analyst_focus: '判断顺序：①先读 layered_score.phase 相位——suppress=true(力竭/反转)时该方向延续单一律观望；retraceType=pullback时可顺势但用 phase.suggestExpiry 的长期限；②再用 total 和 feature_pool 做方向和置信度确认。相位优先于总分。',
-      critic_focus: '核查相位判定：力竭相位的衰竭证据(背离/缩量/StochRSI转向)是否成立？回踩判定中"结构未破+缩量"是否属实，还是已放量破结构=反转？',
-      judge_focus: '相位是第一权重：phase.suppress=true 时不论总分多高都倾向观望（这是在防止在力竭底/顶部追、在回踩里反复追）；retraceType=pullback 顺势单必须用长期限(15/30M)；回踩结束相位可给强顺势。'
+      historian_focus: '优先比较 相位(layered_score.phase.phase) 与 执行周期合力方向是否相同——力竭/回踩进行中/反转确认/推进相位不同则历史不可比；再比 scores(S/M/V)、量能regime、动能背离、与关键位距离',
+      analyst_focus: '判断顺序：①先读 phase。suppress=true(力竭 或 回踩进行中)→观望，不可在回踩途中顺势接刀；phase=reversal_confirmed→顺 tradeDir 方向(可反手做空/做多)；phase=retrace_end→顺 tradeDir 强顺势(短周期可入)；phase=impulse→顺势但回撤后入场勿追顶。②方向以 phase.tradeDir 为准(不是高周期背景 bgDir)；tradeDir=null 时观望。③再用 scores 和 feature_pool 确认置信度。',
+      critic_focus: '核查：①回踩进行中是否被误判为可顺势？②反转确认(reversal_confirmed)的结构破位/放量证据是否成立(有迹可循，非乱反手)？③力竭衰竭证据(背离/缩量/斜率走平≥2项)是否齐？④tradeDir 与执行周期 S/M/V 合力是否一致？',
+      judge_focus: '相位第一权重：phase.suppress=true(力竭/回踩进行中)一律观望；方向必须用 phase.tradeDir(可能与高周期相反=反转单)，严禁因"高周期还在涨"就否决执行周期已确认的反转；retrace_end/impulse 顺 tradeDir 放行。'
     };
 
     return {
@@ -2698,20 +2725,26 @@
     const lsTotal = ls.total != null ? ls.total : '—';
     const vetoText = ls.vetoes && ls.vetoes.length ? ls.vetoes.join('；') : '无';
     const _ph = ls.phase || {};
-    const _phDir = _ph.trendDir === 'bullish' ? '看涨' : _ph.trendDir === 'bearish' ? '看跌' : '—';
+    const _bgTxt = _ph.bgDir === 'bullish' ? '看涨' : _ph.bgDir === 'bearish' ? '看跌'
+                 : _ph.bgDir === 'mild_bullish' ? '偏多' : _ph.bgDir === 'mild_bearish' ? '偏空' : '中性';
+    const _tradeTxt = _ph.tradeDir === 'bullish' ? '看涨' : _ph.tradeDir === 'bearish' ? '看跌' : '—';
+    const _scTxt = _ph.scores ? ('执行周期合力op=' + _ph.scores.op + '（斜率结构S' + _ph.scores.S + ' 动能M' + _ph.scores.M + ' 量能V' + _ph.scores.V + '）') : '—';
     const phaseBlock = '\n【相位判定（第一权重，先看这个）】\n' +
       (_ph.confirmed
-        ? ('  趋势方向(15M+30M确认)：' + _phDir + '\n' +
+        ? ('  高周期背景(15M+30M)：' + _bgTxt + '\n' +
+           '  ' + _scTxt + '\n' +
            '  当前相位：' + (_ph.label || _ph.phase) + '\n' +
            '  依据：' + ((_ph.evidence && _ph.evidence.length) ? _ph.evidence.join('、') : '—') + '\n' +
            '  决策含义：' + (_ph.suppress
-              ? ('⛔ ' + _phDir + '延续单观望（处于力竭/反转相位，正是在防止追顶/底或在回踩里反复追）')
-              : _ph.retraceType === 'pullback'
-              ? ('✅ 可顺势' + _phDir + '，但必须用长期限(建议' + (_ph.suggestExpiry || 15) + '分钟)扛过回踩')
+              ? ('⛔ 观望——' + (_ph.phase === 'exhaustion' ? '力竭区(防追顶/底)' : '回踩进行中(等回踩结束或反转确认，勿在途中接刀)'))
+              : _ph.phase === 'reversal_confirmed'
+              ? ('🔄 反转确认，顺执行周期方向【' + _tradeTxt + '】(可反手，结构破位/放量为据，建议' + (_ph.suggestExpiry || 10) + '分钟)')
               : _ph.phase === 'retrace_end'
-              ? ('✅ 回踩结束，强顺势' + _phDir + '（建议' + (_ph.suggestExpiry || 10) + '分钟）')
-              : ('顺势' + _phDir + '（建议' + (_ph.suggestExpiry || 5) + '分钟）')) + '\n')
-        : ('  ' + (ls.phaseNote || '趋势未确认，相位模型不介入，按常规三层评分判断') + '\n'));
+              ? ('✅ 回踩结束，强顺势【' + _tradeTxt + '】(短周期可入，建议' + (_ph.suggestExpiry || 10) + '分钟)')
+              : _ph.phase === 'impulse'
+              ? ('✅ 推进段顺势【' + _tradeTxt + '】(回撤后入场勿追顶/底，建议' + (_ph.suggestExpiry || 10) + '分钟)')
+              : ('方向不清，观望')) + '\n')
+        : ('  ' + (ls.phaseNote || '方向不清，相位模型不介入') + '\n'));
 
     const summary = phaseBlock + '\n【量化评分（三层打分）】\n' +
       '  1H方向权重：' + (ls1h.score != null ? (ls1h.score > 0 ? '+' : '') + ls1h.score : '—') +
