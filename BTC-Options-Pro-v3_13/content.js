@@ -2492,85 +2492,67 @@
     const opDir = opScore >= 2.5 ? 'bullish' : opScore <= -2.5 ? 'bearish' : 'neutral';
     res.scores = { S: Number(S.toFixed(1)), M: Number(M.toFixed(1)), V: Number(V.toFixed(1)), op: opScore, bg: bgSign };
 
-    if (bgDir === 'neutral') {
-      res.label = '高周期方向中性，观望'; res.evidence = sEv.concat(mEv, vEv); return res;
-    }
+    // ════ v3.13.2 纯剥头皮模式（Volman：执行周期定方向，大周期只作顺风/逆风加减分，绝不否决）════
+    //   方向 = 执行周期合力 opDir（|op|≥2.5 直接定向）。大周期 bgDir 只调 contBias(置信)与期限：
+    //   顺风→加分、可短打；逆风→方向照给但缩期限/降注；大周期中性→纯看执行周期。
     const bgUp = bgSign > 0;
-    const agreesBg  = (bgUp && opScore > 0) || (!bgUp && opScore < 0);
-    const opposesBg = (bgUp && opScore < 0) || (!bgUp && opScore > 0);
+    const bgNeutral = bgDir === 'neutral';
+    const tailwind = !bgNeutral && ((bgUp && opDir === 'bullish') || (!bgUp && opDir === 'bearish'));
+    const headwind = !bgNeutral && ((bgUp && opDir === 'bearish') || (!bgUp && opDir === 'bullish'));
+    const upMove = opDir === 'bullish';
 
-    // 伸展/极值（力竭判定料）
+    // 力竭料（仅在合力很强且已伸展到极值时短暂观望，防接最后一棒；剥头皮门槛放宽）
     const dEma = ex.dist && isFinite(ex.dist.ema21_atr) ? ex.dist.ema21_atr : null;
-    const stretch = dEma != null && (bgUp ? dEma >= 1.5 : dEma <= -1.5);
+    const stretch = dEma != null && (upMove ? dEma >= 2.0 : dEma <= -2.0);
     const bbP = isFinite(ex.bbPct) ? ex.bbPct : (isFinite(tr.bbPct) ? tr.bbPct : null);
-    const atTrendExtreme = bbP != null && (bgUp ? bbP >= 0.85 : bbP <= 0.15);
-    const atCounterBand  = bbP != null && (bgUp ? bbP <= 0.15 : bbP >= 0.85);
-
+    const atExtreme = bbP != null && (upMove ? bbP >= 0.9 : bbP <= 0.1);
     const exhaustSignals = [];
-    if (bgUp) {
+    if (upMove) {
       if (ex.momDivergence === 'bear' || tr.momDivergence === 'bear') exhaustSignals.push('顶背离');
       if (st === 'down_from_overbought') exhaustSignals.push('StochRSI超买死叉');
-    } else {
+    } else if (opDir === 'bearish') {
       if (ex.momDivergence === 'bull' || tr.momDivergence === 'bull') exhaustSignals.push('底背离');
       if (st === 'up_from_oversold') exhaustSignals.push('StochRSI超卖金叉');
     }
-    if (ex.volRegime === 'contracting') exhaustSignals.push('顺势缩量');
     if (sw.slopeFlatten) exhaustSignals.push('斜率走平');
 
-    // 回踩结束：逆势波动后，触发周期重新转回顺背景方向（价格动作确认，非仅指标）
-    const resumeBg = bgUp
-      ? (fl.includes('lower_wick_reject') || flT.includes('lower_wick_reject') || ex.engulfing === 'bullish' || tr.engulfing === 'bullish' || st === 'up_from_oversold')
-      : (fl.includes('upper_wick_reject') || flT.includes('upper_wick_reject') || ex.engulfing === 'bearish' || tr.engulfing === 'bearish' || st === 'down_from_overbought');
-
-    // 反转确认：执行周期决定性逆背景（结构破位 或 逆背景放量），且合力强 → 顺执行周期反手
-    const structFlip = bgUp ? (sw.brokePrevLow === true) : (sw.brokePrevHigh === true);
-    const volFlip = ex.volRegime === 'expanding' && (bgUp ? moveDn : moveUp);
-    const strongOp = Math.abs(opScore) >= 6;
-    const reversalConfirmed = opposesBg && strongOp && (structFlip || volFlip);
-
     const setDir = (d) => { res.trendDir = d; res.tradeDir = d; res.trendSign = d === 'bullish' ? 1 : d === 'bearish' ? -1 : 0; };
-    const refDir = bgUp ? 'bullish' : 'bearish';
 
-    if (agreesBg && (atTrendExtreme || stretch) && exhaustSignals.length >= 2) {
-      // 力竭区：顺背景已极值 + ≥2项衰竭 → 观望（防追顶/底）。要求2项以避免过度抑制。
-      res.confirmed = true; res.phase = 'exhaustion'; res.suppress = true;
-      res.trendDir = refDir; res.tradeDir = null; res.trendSign = 0;
-      res.contBias = -3; res.suggestExpiry = null;
-      res.evidence = ['伸展到顺势极值'].concat(exhaustSignals);
-      res.label = '力竭区(反弹/回落将至，顺势单观望)';
-    } else if (reversalConfirmed) {
-      // 反转确认：顺执行周期方向（可反手），有迹可循=结构破位/放量+合力强
-      res.confirmed = true; res.phase = 'reversal_confirmed'; res.retraceType = 'reversal'; res.suppress = false;
-      setDir(opDir); res.contBias = 2; res.suggestExpiry = 10;
-      res.evidence = [(bgUp ? '上涨背景但5M决定性转空' : '下跌背景但5M决定性转多'),
-                      structFlip ? '执行周期结构破位' : '逆背景放量'].concat(mEv.slice(0, 2));
-      res.label = '反转确认(顺执行周期方向，可反手)';
-    } else if (opposesBg && resumeBg && (atCounterBand || Math.abs(opScore) <= 4)) {
-      // 回踩结束：逆势波动收尾，价格重回顺背景 → 强顺势（短周期可用）
-      res.confirmed = true; res.phase = 'retrace_end'; res.retraceType = 'pullback_end';
-      setDir(refDir); res.contBias = 3; res.suggestExpiry = 10;
-      res.evidence = ['回踩末端价格重回顺势', '出现顺势拒绝/吞没/StochRSI转向'];
-      res.label = '回踩结束(强顺势恢复，短周期可入)';
-    } else if (opposesBg) {
-      // 回踩进行中(未确认反转、未结束) → 观望，等回踩结束信号(Brooks：入场在恢复K，不在回踩途中)。
-      //   这是修复"上涨趋势里一路看涨、回踩全亏"的核心：回踩途中不再顺势接刀。
-      res.confirmed = true; res.phase = 'retrace_progress'; res.retraceType = 'pullback'; res.suppress = true;
-      res.trendDir = refDir; res.tradeDir = null; res.trendSign = 0;
-      res.contBias = 0; res.suggestExpiry = null;
-      res.evidence = ['逆背景波动进行中', structFlip ? '已破位，警惕转为反转' : '结构未破', '等回踩结束/反转确认再动手'];
-      res.label = '回踩进行中(观望，等回踩结束或反转确认)';
-    } else if (agreesBg && Math.abs(opScore) >= 2.5) {
-      // 推进段：执行周期与背景同向且合力足
-      res.confirmed = true; res.phase = 'impulse';
-      setDir(refDir); res.contBias = 2; res.suggestExpiry = 10;
-      res.evidence = ['执行周期与背景同向推进'].concat(sEv.slice(0, 2), vEv.slice(0, 1));
-      res.label = '推进段(顺势，回撤后入场勿追顶/底)';
-    } else {
-      // 合力不足(|op|<2.5) → 方向不清，观望
+    if (opDir === 'neutral') {
+      // 执行周期合力不足 → 真没方向，观望（剥头皮唯一的方向性观望）
       res.confirmed = false; res.phase = 'unclear';
-      res.trendDir = refDir; res.tradeDir = null; res.trendSign = 0; res.suggestExpiry = null;
-      res.evidence = ['执行周期合力不足(op=' + opScore + ')，方向不清'];
+      res.trendDir = null; res.tradeDir = null; res.trendSign = 0; res.suggestExpiry = null;
+      res.evidence = ['执行周期合力不足(op=' + opScore + ')，无明确方向'];
       res.label = '方向不清(观望)';
+    } else if (Math.abs(opScore) >= 4 && (atExtreme || stretch) && exhaustSignals.length >= 2) {
+      // 力竭：合力强但已伸展到极值 + ≥2项衰竭 → 短暂观望防接最后一棒（门槛高，少触发）
+      res.confirmed = true; res.phase = 'exhaustion'; res.suppress = true;
+      res.trendDir = opDir; res.tradeDir = null; res.trendSign = 0;
+      res.contBias = 0; res.suggestExpiry = null;
+      res.evidence = ['伸展到极值'].concat(exhaustSignals);
+      res.label = '力竭区(短暂观望，防接最后一棒)';
+    } else {
+      // 正常：执行周期方向直接成交。大周期只调 contBias 与期限。
+      setDir(opDir);
+      res.confirmed = true;
+      if (tailwind) {
+        res.phase = 'impulse'; res.contBias = 2; res.suggestExpiry = 5;
+        res.evidence = ['执行周期' + (upMove ? '多' : '空') + '(op=' + opScore + ')', '大周期顺风'].concat(sEv.slice(0, 1));
+        res.label = '顺风推进(执行周期主导，可短打)';
+      } else if (headwind) {
+        // 逆大周期 = 典型剥头皮反手/反转单：方向照给，缩期限快进快出
+        const flipped = sw.brokePrevLow || sw.brokePrevHigh || ex.volRegime === 'expanding';
+        res.phase = flipped ? 'reversal_confirmed' : 'counter_scalp';
+        res.retraceType = 'reversal'; res.contBias = 1; res.suggestExpiry = 5;
+        res.evidence = ['执行周期' + (upMove ? '多' : '空') + '(op=' + opScore + ')',
+                        '逆大周期(背景' + (bgUp ? '涨' : '跌') + ')，缩期限快进快出'].concat(mEv.slice(0, 1));
+        res.label = flipped ? '反转确认(执行周期破位/放量，逆大周期反手)' : '逆风剥头皮(执行周期主导，短打降注)';
+      } else {
+        // 大周期中性：纯看执行周期
+        res.phase = 'impulse'; res.contBias = 2; res.suggestExpiry = 5;
+        res.evidence = ['执行周期' + (upMove ? '多' : '空') + '(op=' + opScore + ')', '大周期中性'];
+        res.label = '执行周期主导(大周期中性)';
+      }
     }
     return res;
   }

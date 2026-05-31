@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
   "name": "BTC Options Pro Analyzer v2",
-  "version": "3.13.1",
-  "description": "Binance 二元期权 4-Agent（v3.13.1: 相位引擎重写——斜率结构+动能+量能加权投票，执行周期方向独立，支持回踩进行中观望/回踩结束顺势/反转确认反手；修复上涨趋势一路看涨、回踩全亏）",
+  "version": "3.13.2",
+  "description": "Binance 二元期权 4-Agent（v3.13.2: 纯剥头皮模式——执行周期(1M/5M)定方向，大周期(15M/30M)只作顺风/逆风加减分绝不否决；逆大周期照做但缩5M期限快进快出；不再被大周期锁死）",
   "permissions": [
     "activeTab",
     "storage",
