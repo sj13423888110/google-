@@ -2539,6 +2539,20 @@
 
     const setDir = (d) => { res.trendDir = d; res.tradeDir = d; res.trendSign = d === 'bullish' ? 1 : d === 'bearish' ? -1 : 0; };
 
+    // v3.13.9 前方空间闸（Volman整数关口/阻力墙 + 做市商"勿买在墙下"）：
+    //   顺势方向前方最近阻挡(前高/前低/整数位)若太近，价格几乎无运行空间 → 追该方向=接盘。
+    const _d = ex.dist || {};
+    const fwdRaw = upMove
+      ? [_d.prevHigh_atr, _d.roundLevel_atr, _d.bbUpper_atr]
+      : [_d.prevLow_atr, _d.roundLevel_atr, _d.bbLower_atr];
+    const fwdRoomList = fwdRaw.filter(v => isFinite(v))
+      .filter(v => upMove ? v > 0 : v < 0)
+      .map(v => Math.abs(v));
+    const fwdRoom = fwdRoomList.length ? Math.min.apply(null, fwdRoomList) : null;
+    const noRoom = fwdRoom != null && fwdRoom <= 0.3;       // 贴脸阻挡：≤0.3ATR
+    const tightRoom = fwdRoom != null && fwdRoom <= 0.8;     // 空间偏小：≤0.8ATR
+    res.fwdRoom = fwdRoom;
+
     if (opDir === 'neutral') {
       // 执行周期合力不足 → 真没方向，观望（剥头皮唯一的方向性观望）
       res.confirmed = false; res.phase = 'unclear';
@@ -2552,6 +2566,13 @@
       res.contBias = 0; res.suggestExpiry = null;
       res.evidence = ['伸展到极值'].concat(exhaustSignals);
       res.label = '力竭区(短暂观望，防接最后一棒)';
+    } else if (noRoom && Math.abs(opScore) < 6) {
+      // v3.13.9 前方空间闸：顺势方向前方≤0.3ATR就有阻挡(前高/前低/整数位)，且信号不强 →
+      //   追该方向=买在墙下/卖在地板上，几乎无空间，极易被拒回落 → 观望。
+      res.confirmed = false; res.phase = 'no_room'; res.suppress = true;
+      res.trendDir = opDir; res.tradeDir = null; res.trendSign = 0; res.suggestExpiry = null;
+      res.evidence = ['顺势方向前方仅' + fwdRoom.toFixed(2) + 'ATR即遇阻挡', '空间不足，追=接盘'];
+      res.label = '空间不足(贴阻力/支撑，观望)';
     } else {
       // 正常：执行周期方向直接成交。大周期只调 contBias 与期限。
       setDir(opDir);
@@ -2619,7 +2640,8 @@
     const fwdDists = fwd.filter(v => isFinite(v)).map(v => Math.abs(v)).filter(v => v > 0.05);
     if (fwdDists.length) {
       const nearest = Math.min.apply(null, fwdDists);
-      if (nearest <= 1)      { score -= 1.5; why.push('目标位近(' + nearest.toFixed(1) + 'ATR→短)'); }
+      if (nearest <= 0.5)    { score -= 3; why.push('目标位极近(' + nearest.toFixed(1) + 'ATR→强制短)'); }
+      else if (nearest <= 1) { score -= 1.5; why.push('目标位近(' + nearest.toFixed(1) + 'ATR→短)'); }
       else if (nearest >= 3) { score += 1.5; why.push('空间大(' + nearest.toFixed(1) + 'ATR→长)'); }
     }
 
