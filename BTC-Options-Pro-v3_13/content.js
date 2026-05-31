@@ -565,8 +565,15 @@
     const _pendingCount = sessions.filter(s => s.direction && s.direction !== 'neutral' && !s.verifyResult && s.verifyAt).length;
     const _totalNonNeutral = sessions.filter(s => s.direction && s.direction !== 'neutral').length;
 
+    // v3.15 观望踏空率：观望后价格单边走了(本可盈利却踏空)的比例
+    const _watched = sessions.filter(s => s.watchResult === 'miss' || s.watchResult === 'correct');
+    const _missCnt = _watched.filter(s => s.watchResult === 'miss').length;
+    const _missRate = _watched.length >= 5 ? Math.round(_missCnt / _watched.length * 100) : null;
+    const _missColor = _missRate == null ? '#4a4e5a' : _missRate >= 50 ? '#f87171' : _missRate <= 20 ? '#4ade80' : '#fbbf24';
+    const _missStr = _missRate == null ? '' : ' &nbsp;|&nbsp; <span style="color:' + _missColor + '">观望踏空率 ' + _missRate + '%(' + _missCnt + '/' + _watched.length + ')</span>';
+
     const _profileBadge = '<div style="display:flex;justify-content:flex-end;align-items:center;background:#12151e;border:1px solid #2a2e39;border-radius:6px;padding:5px 8px;margin-bottom:8px;font-size:11px">'
-      + '<span style="color:#4a4e5a">⏳ ' + _pendingCount + ' 待验证 &nbsp;|&nbsp; 共 ' + _totalNonNeutral + ' 笔</span>'
+      + '<span style="color:#4a4e5a">⏳ ' + _pendingCount + ' 待验证 &nbsp;|&nbsp; 共 ' + _totalNonNeutral + ' 笔' + _missStr + '</span>'
       + '</div>';
 
     if (!sessions.length) {

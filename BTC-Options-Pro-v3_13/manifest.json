@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
   "name": "BTC Options Pro Analyzer v2",
-  "version": "3.14.2",
-  "description": "Binance 二元期权 4-Agent（v3.14.2: 期限四档5/10/15/30完全平权——明确分开分析周期(看图)与到期期限，期限纯按动能+空间决定不受剥头皮/顺逆背景预设；五本书心法+LLM主导协作纠错）",
+  "version": "3.15.0",
+  "description": "Binance 二元期权 4-Agent（v3.15: 观望也纳入复盘——观望单事后检验踏空率(本可盈利却观望)，单独统计不混入方向胜率，喂给裁判/元裁判推动减少无效观望；LLM主导+五本书心法+协作纠错）",
   "permissions": [
     "activeTab",
     "storage",

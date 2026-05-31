@@ -355,7 +355,8 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       const _hasPending = _ss.some(function(s) {
         return (s.direction && s.direction !== 'neutral' && !s.verifyResult && s.verifyAt) ||
                (s.analystDirection && s.analystDirection !== 'neutral' && !s.analystVerifyResult && s.analystVerifyAt) ||
-               (!s.verifyResult && s.verifyAt) || (!s.analystVerifyResult && s.analystVerifyAt);
+               (!s.verifyResult && s.verifyAt) || (!s.analystVerifyResult && s.analystVerifyAt) ||
+               (s.direction === 'neutral' && !s.watchResult && s.watchVerifyAt);
       });
       if (!_hasPending) stopKeepAliveAlarm();
     }).catch(function() { stopKeepAliveAlarm(); });
@@ -370,7 +371,8 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       const _hasPending = _ss.some(function(s) {
         return (s.direction && s.direction !== 'neutral' && !s.verifyResult && s.verifyAt) ||
                (s.analystDirection && s.analystDirection !== 'neutral' && !s.analystVerifyResult && s.analystVerifyAt) ||
-               (!s.verifyResult && s.verifyAt) || (!s.analystVerifyResult && s.analystVerifyAt);
+               (!s.verifyResult && s.verifyAt) || (!s.analystVerifyResult && s.analystVerifyAt) ||
+               (s.direction === 'neutral' && !s.watchResult && s.watchVerifyAt);
       });
       if (_hasPending) startKeepAliveAlarm();
     }).catch(function() {});
@@ -467,6 +469,11 @@ const KEEPALIVE_ALARM = 'tvc-keepalive';
 // 每 META_JUDGE_EVERY 条已验证 session 触发一次深度审计
 const META_JUDGE_ALARM = 'tvc-meta-judge';
 const META_JUDGE_EVERY = 30; // v3.13.5: 15→30。样本翻倍使分桶统计更可信，且触发频率减半=省一半token。
+
+// v3.15 观望事后检验：观望单到期(WATCH_VERIFY_MIN分钟)后看价格走势——
+//   单边变动 ≥ WATCH_MISS_PCT 视为"踏空(观望错误)"，否则"观望正确"。单独统计踏空率，不混入方向胜率。
+const WATCH_VERIFY_MIN = 10;     // 观望检验窗口(分钟)
+const WATCH_MISS_PCT  = 0.0015;  // 单边变动≥0.15%判踏空(约对应一笔有效二元期权机会)
 let _metaJudgeRunning = false; // 全局标志：元裁判正在运行时主流程等待
 
 function startKeepAliveAlarm() {
@@ -1808,6 +1815,22 @@ function buildVerificationSection(autoSessions, currentClosedPrice) {
     }
   }
 
+  // v3.15 观望踏空率统计（观望也被复盘：本可看涨/看跌却观望，事后价格单边走了=踏空错误）
+  const _watched = autoSessions.filter(s => s.watchResult === 'miss' || s.watchResult === 'correct');
+  if (_watched.length >= 5) {
+    const _miss = _watched.filter(s => s.watchResult === 'miss');
+    const _missRate = Math.round(_miss.length / _watched.length * 100);
+    section += '\n【观望质量（近' + _watched.length + '次观望事后检验）】\n';
+    section += '  踏空率：' + _miss.length + '/' + _watched.length + '（' + _missRate + '%）——观望后价格单边走了(本可盈利却踏空)的比例\n';
+    if (_missRate >= 50) {
+      const _up = _miss.filter(s => s.watchMissDir === 'bullish').length;
+      const _dn = _miss.filter(s => s.watchMissDir === 'bearish').length;
+      section += '  ⚠️ 踏空率过高，说明入场门槛偏保守、错过太多有效行情。踏空方向分布：看涨' + _up + '次/看跌' + _dn + '次。请降低观望倾向，有依据就给方向。\n';
+    } else if (_missRate <= 20) {
+      section += '  ✅ 踏空率低，观望多为正确(避开了震荡)。\n';
+    }
+  }
+
   return section;
 }
 
@@ -2279,6 +2302,10 @@ async function handleAutoAnalyze(msg, senderTabId) {
       interval: interval,
       verifyAt:       judgeVerifyMs   ? dataTimestamp + judgeVerifyMs   : null,
       analystVerifyAt: analystVerifyMs ? dataTimestamp + analystVerifyMs : null,
+      // v3.15: 观望单也做事后检验——裁判观望时设固定检验窗口(WATCH_VERIFY_MIN分钟)，
+      //   到期看价格是否单边走了(踏空)还是窄幅震荡(观望正确)。单独统计，不混入方向胜率。
+      watchVerifyAt:   (direction.label === 'neutral') ? dataTimestamp + WATCH_VERIFY_MIN * 60000 : null,
+      watchEntryPrice: (direction.label === 'neutral') ? currentClosedPrice : null,
       result: result,
       analystResult: analystResult,
       criticResult: criticResult,
@@ -2858,6 +2885,28 @@ async function runPendingVerifications(wsPrice, wsTimestamp, tabId) {
         }
       }
 
+      // v3.15 观望事后检验（踏空率）：观望单到期后，看价格是否单边走了。
+      //   单独写入 watchResult/watchMissDir，不碰 verifyResult(不混入方向胜率)。
+      if (s.direction === 'neutral' && !s.watchResult && s.watchVerifyAt && s.watchVerifyAt <= effectiveNow
+          && (s.watchEntryPrice || s.closedPrice)) {
+        const _wEntry = s.watchEntryPrice || s.closedPrice;
+        let _wPrice = null;
+        if (wsPrice && effectiveNow <= s.watchVerifyAt + iMs) _wPrice = wsPrice;
+        else _wPrice = await fetchPriceAtTime(s.interval || '1m', s.watchVerifyAt, sym);
+        if (_wPrice && _wEntry) {
+          const chg = (_wPrice - _wEntry) / _wEntry;
+          if (Math.abs(chg) >= WATCH_MISS_PCT) {
+            // 价格单边走了 → 踏空(观望错误)，记下本该的方向
+            s.watchResult = 'miss';
+            s.watchMissDir = chg > 0 ? 'bullish' : 'bearish';
+          } else {
+            s.watchResult = 'correct'; // 窄幅震荡 → 观望正确
+          }
+          s.watchChgPct = Number((chg * 100).toFixed(3));
+          changed = true; if (_wPrice !== wsPrice) retroCount++;
+        }
+      }
+
       // 分析师验证（含重试 terminated 旧记录）
       if ((!s.analystVerifyResult || s.analystVerifyResult === 'terminated') && s.analystDirection && s.analystDirection !== 'neutral' && s.analystVerifyAt && s.analystVerifyAt <= effectiveNow) {
         if (wsPrice && effectiveNow <= s.analystVerifyAt + iMs) {
@@ -2892,6 +2941,10 @@ async function runPendingVerifications(wsPrice, wsTimestamp, tabId) {
           if (s.analystVerifyResult != null) latestSessions[idx].analystVerifyResult = s.analystVerifyResult;
           if (s.analystVerifyPrice != null)  latestSessions[idx].analystVerifyPrice  = s.analystVerifyPrice;
           if (s.analystRealPnl != null)      latestSessions[idx].analystRealPnl      = s.analystRealPnl;
+          // v3.15 观望踏空检验结果写回
+          if (s.watchResult != null)         latestSessions[idx].watchResult         = s.watchResult;
+          if (s.watchMissDir != null)        latestSessions[idx].watchMissDir        = s.watchMissDir;
+          if (s.watchChgPct != null)         latestSessions[idx].watchChgPct          = s.watchChgPct;
           // P2改进：A/B实验结果记录（有 variant 且本次刚验证完的 session）
           if (s.abVariant && s.realPnl != null && (s.verifyResult === 'win' || s.verifyResult === 'loss')) {
             recordABResult(s.abVariant, s.realPnl, s.verifyResult === 'win').catch(e => logSafe('[recordABResult]', e));
@@ -3646,6 +3699,18 @@ async function handleMetaJudge(tabId) {
         + '  ← suppress 触发时系统观望，若实际胜率偏高说明 suppress 误杀顺势信号';
     }
 
+    // ── v3.15 观望踏空率统计（观望也被复盘）──
+    let watchText = '';
+    const watched = autoSessions.filter(function(s) { return s.watchResult === 'miss' || s.watchResult === 'correct'; });
+    if (watched.length >= 5) {
+      const miss = watched.filter(function(s) { return s.watchResult === 'miss'; });
+      const missUp = miss.filter(function(s) { return s.watchMissDir === 'bullish'; }).length;
+      const missDn = miss.filter(function(s) { return s.watchMissDir === 'bearish'; }).length;
+      watchText = '\n观望踏空率：' + miss.length + '/' + watched.length
+        + '（' + Math.round(miss.length / watched.length * 100) + '%）  踏空方向 看涨' + missUp + '/看跌' + missDn
+        + '  ← 观望后价格单边走了(本可盈利却踏空)的比例。过高(≥50%)说明入场门槛太保守、系统过度观望，应推动减少无效观望、提升出手率';
+    }
+
     // ── 质疑师风险评级准确性 ──
     const criticFeedback = buildCriticFeedbackSection(verified);
 
@@ -3736,7 +3801,7 @@ async function handleMetaJudge(tabId) {
       '分析师：' + analystWins + '/' + analystVerified.length +
         (analystVerified.length ? '（' + Math.round(analystWins / analystVerified.length * 100) + '%）' : '') + '\n' +
       (condWRText ? '条件胜率：' + condWRText : '') +
-      suppressText + divergeText + pnlText + phaseAdxText + criticFeedback + '\n\n' +
+      suppressText + watchText + divergeText + pnlText + phaseAdxText + criticFeedback + '\n\n' +
       '【近' + verified.length + '条已验证记录（事后走势对照，由新到旧）】\n' +
       '说明：前' + Math.min(enrichLimit, verified.length) + '条已拉取Binance真实K线（含事后N棒走势+区间涨跌幅+方向对照），✓=方向正确 ✗=方向错误；第' + (Math.min(enrichLimit, verified.length) + 1) + '条起为文字摘要（无K线数据），请降低权重\n' +
       sessionsText +
