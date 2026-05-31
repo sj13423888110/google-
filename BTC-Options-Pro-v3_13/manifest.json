@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
   "name": "BTC Options Pro Analyzer v2",
-  "version": "3.14.0",
-  "description": "Binance 二元期权 4-Agent（v3.14: 架构转向LLM主导——规则引擎降为参考信号，方向/可否/期限由分析师·质疑师·裁判独立判断并相互纠错；代码只保留真死盘+保本线两道硬安全线）",
+  "version": "3.14.1",
+  "description": "Binance 二元期权 4-Agent（v3.14.1: 五本书交易心法注入交易背景，4 Agent 共享——价格行为/量价/剥头皮(高周期不锁死)/做市商反陷阱/短线波动率；LLM主导独立判断+协作纠错）",
   "permissions": [
     "activeTab",
     "storage",

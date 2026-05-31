@@ -562,31 +562,41 @@ chrome.runtime.onInstalled.addListener(async function(details) {
   // 4. v2.7: 提示词自动迁移
   //   策略：仅当用户从未自定义过（stored 为空或恰好等于旧默认）才更新；任何手动改动都保留
   try {
-    const PROMPT_VERSION = 'v3.13';
-    const stored27 = await chrome.storage.local.get(['agentPrompts', 'historianPrompt', 'promptDefaultsVersion']);
+    const PROMPT_VERSION = 'v3.14';
+    const stored27 = await chrome.storage.local.get(['agentPrompts', 'historianPrompt', 'background', 'promptDefaultsVersion']);
     if (stored27.promptDefaultsVersion !== PROMPT_VERSION) {
-      // 历史默认提示词的"起始指纹"——只要命中任一历史默认头部，即视为"用户未自定义过"，
-      // 升级时刷新为 v3.13 决策层新默认；真正自己改过的(不匹配任何指纹)一律保留。
+      // 历史默认提示词的"起始指纹"——命中任一历史默认头部=用户没自定义过，升级时刷新为最新默认。
       const OLD_ANALYST_FPS = [
-        '【背景】二元期权：预测准确盈利80%',                    // v2.6
-        '[角色] BTC二元期权分析师。基于多周期结构化特征池'        // v3.0-v3.12
+        '【背景】二元期权：预测准确盈利80%',
+        '[角色] BTC二元期权分析师。基于多周期结构化特征池',
+        '[角色] BTC二元期权分析师·机会生成器'                  // v3.13
       ];
       const OLD_CRITIC_FPS = [
-        '【背景】你是二元期权风险质疑者',                        // v2.6
-        '[角色] 二元期权质疑师。你是辩护律师'                    // v3.0-v3.12
+        '【背景】你是二元期权风险质疑者',
+        '[角色] 二元期权质疑师。你是辩护律师',
+        '[角色] 二元期权质疑师·陷阱过滤器'                      // v3.13
       ];
       const OLD_JUDGE_FPS = [
-        '[角色] 二元期权裁判。综合分析师',                       // v2.6
-        '[角色] 二元期权裁判。你是独立法官'                      // v3.0-v3.12
+        '[角色] 二元期权裁判。综合分析师',
+        '[角色] 二元期权裁判。你是独立法官',
+        '[角色] 二元期权裁判·最终决策器'                        // v3.13
       ];
       const OLD_HIST_FPS = [
-        '【背景】你是二元期权历史学家',                          // v2.6
-        '[角色] 历史学家。你只负责比较'                          // v3.0-v3.12
+        '【背景】你是二元期权历史学家',
+        '[角色] 历史学家。你只负责比较',
+        '[角色] 历史学家·概率先验器'                            // v3.13
+      ];
+      // 旧默认 background 指纹(没加五本书心法的版本)
+      const OLD_BG_FPS = [
+        'BTC二元期权剥头皮。盈利+80%/亏损-100%，盈亏平衡胜率56%。分析基于已收盘',
+        'BTC二元期权剥头皮。盈利+80%/亏损-100%，盈亏平衡胜率约56%；平台赔率不同'  // 旧的无心法版可能微调过
       ];
       const isOldOrEmpty = function(stored, fps) {
-        if (typeof stored !== 'string' || !stored.trim()) return true; // 空/未设
-        return fps.some(function(fp) { return stored.startsWith(fp); }); // 命中任一历史默认 → 没改过
+        if (typeof stored !== 'string' || !stored.trim()) return true;
+        return fps.some(function(fp) { return stored.startsWith(fp); });
       };
+      // background：只在"未自定义(空或旧默认原文)"且不含心法标记时升级
+      const _bgHasXinfa = typeof stored27.background === 'string' && stored27.background.indexOf('交易心法·五本书核心') >= 0;
       const arr = Array.isArray(stored27.agentPrompts) ? stored27.agentPrompts.slice() : ['', '', ''];
       let needWrite = false;
       if (isOldOrEmpty(arr[0], OLD_ANALYST_FPS)) { arr[0] = DEFAULT_ANALYST_PROMPT; needWrite = true; }
@@ -597,10 +607,14 @@ chrome.runtime.onInstalled.addListener(async function(details) {
       if (isOldOrEmpty(stored27.historianPrompt, OLD_HIST_FPS)) {
         writeObj.historianPrompt = DEFAULT_HISTORIAN_PROMPT;
       }
+      // background 升级到含五本书心法的新默认（用户已自定义且含心法的不动）
+      if (!_bgHasXinfa && isOldOrEmpty(stored27.background, OLD_BG_FPS)) {
+        writeObj.background = DEFAULT_BACKGROUND;
+      }
       await chrome.storage.local.set(writeObj);
-      BgLog.info('[onInstalled] 提示词迁移到 v3.13(决策层)',
-        '分析师=' + (writeObj.agentPrompts ? 'updated' : 'kept_custom') +
-        ' 历史学家=' + (writeObj.historianPrompt ? 'updated' : 'kept_custom'));
+      BgLog.info('[onInstalled] 提示词/背景迁移到 v3.14',
+        'agents=' + (writeObj.agentPrompts ? 'updated' : 'kept') +
+        ' bg=' + (writeObj.background ? 'updated(含心法)' : 'kept'));
     }
   } catch(e) {
     logSafe('[onInstalled:promptsMigrate]', e);
@@ -637,7 +651,7 @@ chrome.runtime.onInstalled.addListener(async function(details) {
 // ── 默认提示词 ────────────────────────────────────────────────────
 // v3.0 重写：推理内部完成，只输出结构化结论摘要，严格字数限制
 // 所有默认提示词统一在 background.js 维护，popup.js 通过 GET_DEFAULTS 拉取
-const DEFAULT_BACKGROUND = 'BTC二元期权剥头皮。盈利+80%/亏损-100%，盈亏平衡胜率56%。分析基于已收盘1M K线与结构化特征池，核心期限为5/10/15/30分钟。入场价=新K线开盘价。优先判断方向胜率与到期匹配度，宁可观望也不低质量入场。';
+const DEFAULT_BACKGROUND = 'BTC二元期权剥头皮。盈利+80%/亏损-100%，盈亏平衡胜率约56%；平台赔率不同则保本线随之变。每根1M收盘触发一次独立预测，期限5/10/15/30分钟，入场价=新K线开盘价。\n\n【交易心法·五本书核心(你必须理解并运用，不是背规则)】\n1. 价格行为(Brooks)：市场任一时刻只有一个"主导方向(always-in)"，看结构定——HH/HL=多、LH/LL=空。顺势要在【回撤结束】入场(出现反向拒绝针/反包/动能转回)，绝不在回撤途中接刀；趋势末端过度伸展、连续同向远离均线=力竭，别追最后一棒。\n2. 量价(VPA)：量是因、价是果。上涨/突破必须放量配合才可信；缩量上涨=无需求、缩量突破=假；巨量小实体=高潮换手，多空易反转。价创新高/低但量能或OBV不跟=背离预警。\n3. 剥头皮(Volman)：★在哪个周期交易，就以哪个周期(1M/5M执行周期)的价格行为为准。高周期(15M/30M/1H)只作背景顺风/逆风参考，【滞后且会制造噪声，绝不能用它锁死或否决执行周期的方向】——执行周期明确反向时就跟反向(可反手)。20EMA是动态价值线，回踩EMA是顺势机会。\n4. 做市商(反陷阱)：最"显而易见"的突破常是诱多/诱空陷阱。★勿买在阻力墙下、勿卖在支撑地板上(顺势方向前方没空间=接盘)。刺破前高/前低后迅速收回+长影=止损猎杀，应反向。临近整数关口(如74000)警惕假突破。逆向于过度拥挤的一致交易。\n5. 短线交易：波动率压缩(布林带极窄)后必扩张，顺突破首根放量大实体的方向做；顺动能、不接飞刀(动能未转向前不抢反转)；严守纪律，宁可错过不可做亏期望的低质量单。\n\n【期限即时间投影】到期时长=这段方向能维持多久/走多远。动能强+空间大→长(15/30M)；波动大/空间小/反转/已伸展→短(5M)。方向与期限同等重要。\n\n【整体取舍】二元期权要适度高频(趋势/有空间时主动给方向)，但"贴阻力无空间、缩量、力竭、回撤途中、震荡中部、量价背离"等低质量局面，观望才正确。规则引擎给的相位/评分仅供参考、会机械误判，请用上述心法结合原始K线独立判断。';
 
 // 历史学家：只做相似结构比对，不负责拍板方向
 const DEFAULT_HISTORIAN_PROMPT = '[角色] 历史学家·概率先验器。只回答："当前相位下顺主趋势做，历史命中多少？"禁止定方向、禁止建议观望、禁止下交易结论。推理内部完成，只输出3行，≤100字。\n\n[工作方式(不输出)]\n1. 读 layered_score.phase 的 phase 与 trendDir(主趋势方向)。\n2. 只检索"相同相位"案例(力竭/回踩/推进相位不同=不可比，直接写"无可比样本")。\n3. 同相位案例里统计"顺主趋势方向"的历史命中率 + 最常见1个失败原因。\n\n[输出格式，3行，不得增减]\n【相似案例】最相似1-2个：相位/主趋势方向/时段/最佳期限，sim分\n【顺势胜率】同相位顺势历史命中 X/Y(X%)；样本不足写"样本不足，按中性先验"\n【给分析师】一句先验：该相位顺势是否值得做+期限倾向(不替分析师定方向)';
