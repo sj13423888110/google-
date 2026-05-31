@@ -1,0 +1,66 @@
+{
+  "manifest_version": 3,
+  "name": "BTC Options Pro Analyzer v2",
+  "version": "3.13.0",
+  "description": "Binance 二元期权 4-Agent（v3.13: 决策层重建——以PA价格行为系统为准绳，G0相位闸门/G2方向引擎/G5硬否决/G6期限层/G7动态胜率门槛；修复20%胜率+100%观望）",
+  "permissions": [
+    "activeTab",
+    "storage",
+    "tabs",
+    "notifications",
+    "alarms",
+    "downloads"
+  ],
+  "host_permissions": [
+    "https://api.binance.com/*",
+    "https://stream.binance.com/*",
+    "https://api.anthropic.com/*",
+    "https://api.apikey.fun/*",
+    "https://www.binance.com/*"
+  ],
+  "content_scripts": [
+    {
+      "matches": [
+        "https://www.binance.com/*"
+      ],
+      "js": [
+        "winrate-calc.js",
+        "storage-keys.js",
+        "content.js"
+      ],
+      "css": [
+        "content.css"
+      ],
+      "run_at": "document_idle",
+      "all_frames": false
+    }
+  ],
+  "web_accessible_resources": [
+    {
+      "resources": [
+        "icon*.png"
+      ],
+      "matches": [
+        "https://www.binance.com/*"
+      ]
+    }
+  ],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "icons": {
+    "16": "icon16.png",
+    "32": "icon32.png",
+    "48": "icon48.png",
+    "128": "icon128.png"
+  },
+  "action": {
+    "default_popup": "popup.html",
+    "default_icon": {
+      "16": "icon16.png",
+      "32": "icon32.png",
+      "48": "icon48.png",
+      "128": "icon128.png"
+    }
+  }
+}

@@ -1,0 +1,268 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<style>
+  * { margin:0; padding:0; box-sizing:border-box; }
+  body { width:360px; padding:16px; font-family:-apple-system,'PingFang SC',sans-serif; background:#131722; color:#d1d4dc; }
+  h2 { font-size:14px; margin-bottom:14px; color:#fff; }
+  .section { margin-bottom:14px; }
+  label { font-size:11px; color:#787b86; display:block; margin-bottom:4px; }
+  input, select, textarea {
+    width:100%; background:#1e222d; border:1px solid #2a2e39;
+    border-radius:6px; color:#d1d4dc; font-size:12px;
+    padding:7px 9px; box-sizing:border-box; font-family:inherit;
+  }
+  textarea { resize:vertical; min-height:70px; line-height:1.5; }
+  input:focus, select:focus, textarea:focus { outline:none; border-color:#2962ff; }
+  select option { background:#1e222d; }
+  .model-list-toggle { display:flex; align-items:center; justify-content:space-between; cursor:pointer; user-select:none; }
+  .model-list-toggle label { cursor:pointer; margin:0; }
+  .toggle-arrow { font-size:11px; color:#787b86; transition:transform 0.2s; }
+  .toggle-arrow.open { transform:rotate(90deg); }
+  .model-list-wrap { display:none; }
+  .model-list-wrap.open { display:block; }
+  .model-list { display:flex; flex-direction:column; gap:6px; margin-bottom:8px; }
+  .model-item-header { display:flex; align-items:center; gap:6px; }
+  .mi-name { flex:1; font-size:13px; color:#d1d4dc; font-weight:500; }
+  .mi-model { font-size:11px; color:#787b86; }
+  .mi-actions { display:flex; gap:4px; }
+  .mi-edit, .mi-del { background:none; border:1px solid transparent; border-radius:5px; font-size:12px; padding:2px 7px; cursor:pointer; }
+  .mi-edit { color:#4fc3f7; } .mi-edit:hover { border-color:#4fc3f7; background:#1a2a3a; }
+  .mi-del  { color:#f87171; } .mi-del:hover  { border-color:#f87171; background:#2d1a1a; }
+  .model-edit-form { margin-top:8px; padding-top:8px; border-top:1px solid #2a2e39; display:none; flex-direction:column; gap:6px; }
+  .model-edit-form.open { display:flex; }
+  .ef-label { font-size:11px; color:#787b86; margin-bottom:2px; }
+  .ef-btns { display:flex; gap:6px; margin-top:2px; }
+  .ef-btns button { flex:1; padding:6px; border:none; border-radius:6px; font-size:12px; cursor:pointer; font-weight:600; }
+  .btn-save { background:#2962ff; color:#fff; } .btn-save:hover { background:#1a4fd6; }
+  .btn-cancel { background:#2a2e39; color:#d1d4dc; }
+  .format-row { display:flex; gap:8px; }
+  .format-row label { display:flex; align-items:center; gap:4px; font-size:12px; color:#d1d4dc; cursor:pointer; width:auto; }
+  .format-row input[type=radio] { width:auto; }
+  .btn-add { width:100%; padding:8px; background:#1e222d; border:1px dashed #3a3e4a; border-radius:7px; color:#787b86; font-size:12px; cursor:pointer; text-align:center; }
+  .btn-add:hover { border-color:#2962ff; color:#d1d4dc; }
+  .add-form { background:#1a1f2e; border:1px solid #2a2e39; border-radius:8px; padding:10px; margin-top:6px; display:none; flex-direction:column; gap:6px; }
+  .add-form.open { display:flex; }
+  .add-form-btns { display:flex; gap:6px; }
+  .add-form-btns button { flex:1; padding:7px; border:none; border-radius:6px; font-size:12px; cursor:pointer; font-weight:600; }
+  .btn-confirm { background:#2962ff; color:#fff; }
+  .btn-cancel2 { background:#2a2e39; color:#d1d4dc; }
+  .divider { border:none; border-top:1px solid #2a2e39; margin:12px 0; }
+  #defaultPrompt, #autoPrompt { min-height:80px; font-size:11px; line-height:1.6; }
+  button.save-all { width:100%; margin-top:4px; padding:9px; background:#2962ff; color:#fff; border:none; border-radius:6px; font-size:13px; font-weight:600; cursor:pointer; }
+  button.save-all:hover { background:#1a4fd6; }
+  .saved { color:#4ade80; font-size:12px; margin-top:6px; display:none; text-align:center; }
+  .tip { font-size:11px; color:#4a4e5a; margin-top:8px; line-height:1.5; }
+  .empty-tip { color:#4a4e5a; font-size:12px; text-align:center; padding:10px 0; }
+  .reset-prompt { font-size:11px; color:#4a4e5a; cursor:pointer; float:right; margin-top:-2px; }
+  .reset-prompt:hover { color:#787b86; }
+  .enh-row { display:flex;align-items:flex-start;gap:6px;cursor:pointer;padding:3px 0;font-size:11px;line-height:1.4 }
+  .enh-row input[type=checkbox] { width:auto;margin-top:2px;flex-shrink:0;accent-color:#2962ff }
+  .enh-label { color:#d1d4dc;font-weight:500;min-width:110px;flex-shrink:0 }
+  .enh-desc  { color:#4a4e5a;font-size:10px }
+  .agent-model-row { display:flex; align-items:center; gap:8px; margin-bottom:6px; }
+  .agent-model-row label { width:70px; flex-shrink:0; margin:0; font-size:11px; color:#787b86; }
+  .agent-model-row select { flex:1; }
+  .agent-prompt-row { margin-bottom:12px; }
+  .agent-prompt-header { display:flex; justify-content:space-between; align-items:center; margin-bottom:4px; }
+  .agent-prompt-label { font-size:11px; color:#4a4e5a; }
+  .agent-prompt-reset { font-size:11px; color:#4a4e5a; cursor:pointer; }
+  .agent-prompt-reset:hover { color:#787b86; }
+  .agent-prompt-row textarea { min-height:72px; font-size:11px; line-height:1.6; }
+  .diag-row { display:flex; gap:6px; margin-top:8px; }
+  .diag-btn {
+    flex:1; padding:6px; background:transparent; border:1px solid #2a2e39;
+    border-radius:6px; color:#787b86; font-size:11px; cursor:pointer; font-family:inherit;
+  }
+  .diag-btn:hover { border-color:#4fc3f7; color:#4fc3f7; }
+  .diag-status { font-size:10px; color:#4a4e5a; margin-top:4px; text-align:center; min-height:14px; }
+</style>
+</head>
+<body>
+<h2>🤖 BTC Options Pro v2</h2>
+
+<div class="section">
+  <label>默认模型</label>
+  <select id="defaultModel"></select>
+</div>
+
+<div class="section">
+  <div class="model-list-toggle" id="modelListToggle">
+    <label>已配置模型</label>
+    <span class="toggle-arrow" id="modelListArrow">▶</span>
+  </div>
+  <div class="model-list-wrap" id="modelListWrap">
+    <div style="height:6px"></div>
+    <div class="model-list" id="modelList"></div>
+    <button class="btn-add" id="showAddForm">＋ 添加新模型</button>
+    <div class="add-form" id="addForm">
+    <div><div class="ef-label">名称</div><input id="newName" placeholder="如 Claude / DeepSeek"></div>
+    <div><div class="ef-label">API Key</div><input id="newKey" type="password" placeholder="sk-..."></div>
+    <div><div class="ef-label">Base URL</div><input id="newBase" placeholder="如 https://api.anthropic.com"></div>
+    <div><div class="ef-label">模型名</div><input id="newModel" placeholder="如 claude-sonnet-4-5"></div>
+    <div>
+      <div class="ef-label">API 格式</div>
+      <div class="format-row">
+        <label><input type="radio" name="newFormat" value="anthropic" checked> Anthropic</label>
+        <label><input type="radio" name="newFormat" value="openai"> OpenAI 兼容</label>
+      </div>
+    </div>
+    <div class="add-form-btns" style="flex-direction:column;gap:6px">
+      <button id="testAdd" style="width:100%;padding:7px;border:1px solid #4fc3f7;border-radius:6px;font-size:12px;cursor:pointer;background:transparent;color:#4fc3f7;font-weight:600">⚡ 测试连接</button>
+      <div id="testResult" style="font-size:11px;display:none;padding:4px 6px;border-radius:4px;word-break:break-all"></div>
+      <div style="display:flex;gap:6px">
+        <button class="btn-confirm" id="confirmAdd">添加</button>
+        <button class="btn-cancel2" id="cancelAdd">取消</button>
+      </div>
+    </div>
+  </div>
+  </div><!-- /model-list-wrap -->
+</div>
+
+<hr class="divider">
+
+<div class="section">
+  <label>Multi-Agent 模型配置</label>
+
+  <div class="agent-model-row">
+    <label>🏛️ 历史学家</label>
+    <select id="historianModel"></select>
+  </div>
+  <div class="agent-prompt-row">
+    <div class="agent-prompt-header">
+      <span class="agent-prompt-label">历史学家提示词</span>
+      <span class="agent-prompt-reset" id="resetHistorianPrompt">恢复默认</span>
+    </div>
+    <textarea id="historianPrompt"></textarea>
+  </div>
+
+  <div class="agent-model-row">
+    <label>🔍 分析师</label>
+    <select id="agentModel0"></select>
+  </div>
+  <div class="agent-prompt-row">
+    <div class="agent-prompt-header">
+      <span class="agent-prompt-label">分析师提示词</span>
+      <span class="agent-prompt-reset" id="resetAgentPrompt0">恢复默认</span>
+    </div>
+    <textarea id="agentPrompt0"></textarea>
+  </div>
+  <div class="agent-model-row">
+    <label>⚔️ 质疑师</label>
+    <select id="agentModel1"></select>
+  </div>
+  <div class="agent-prompt-row">
+    <div class="agent-prompt-header">
+      <span class="agent-prompt-label">质疑师提示词</span>
+      <span class="agent-prompt-reset" id="resetAgentPrompt1">恢复默认</span>
+    </div>
+    <textarea id="agentPrompt1"></textarea>
+  </div>
+  <div class="agent-model-row">
+    <label>⚖️ 裁判</label>
+    <select id="agentModel2"></select>
+  </div>
+  <div class="agent-prompt-row">
+    <div class="agent-prompt-header">
+      <span class="agent-prompt-label">裁判提示词</span>
+      <span class="agent-prompt-reset" id="resetAgentPrompt2">恢复默认</span>
+    </div>
+    <textarea id="agentPrompt2"></textarea>
+  </div>
+
+  <!-- v3.2: 元裁判独立模型选择器 -->
+  <div class="agent-model-row" style="margin-top:10px;border-top:1px solid #2a2a3a;padding-top:10px;">
+    <label style="color:#93c5fd;">📋 元裁判（Meta-Judge）</label>
+    <select id="metaJudgeModel"></select>
+  </div>
+  <div style="font-size:11px;color:#6b7280;padding:2px 0 8px 0;">
+    建议选与其他Agent不同的模型，保持独立性（避免利益冲突）
+  </div>
+
+  <!-- v2.7: 每 Agent max_tokens 配置（思考型模型必填项） -->
+  <div style="margin-top:14px; padding:10px; background:#1a1a2a; border:1px solid #2a2a3a; border-radius:6px;">
+    <label style="display:block; margin-bottom:8px; font-size:13px; color:#9ca3af;">
+      Token 上限（思考型模型如 o1/GPT-5 思考/Claude 扩展思考必须调大，普通模型保持默认即可）
+    </label>
+    <div style="display:grid; grid-template-columns: 1fr 1fr; gap:8px;">
+      <div>
+        <label style="font-size:12px; color:#6b7280;">🏛️ 历史学家</label>
+        <input type="number" id="maxTokHistorian" min="200" max="16000" step="100" style="width:100%; padding:6px; background:#0f0f1a; border:1px solid #2a2a3a; color:#e5e7eb; border-radius:4px;">
+      </div>
+      <div>
+        <label style="font-size:12px; color:#6b7280;">🔍 分析师</label>
+        <input type="number" id="maxTokAnalyst" min="200" max="16000" step="100" style="width:100%; padding:6px; background:#0f0f1a; border:1px solid #2a2a3a; color:#e5e7eb; border-radius:4px;">
+      </div>
+      <div>
+        <label style="font-size:12px; color:#6b7280;">⚔️ 质疑师</label>
+        <input type="number" id="maxTokCritic" min="200" max="16000" step="100" style="width:100%; padding:6px; background:#0f0f1a; border:1px solid #2a2a3a; color:#e5e7eb; border-radius:4px;">
+      </div>
+      <div>
+        <label style="font-size:12px; color:#6b7280;">⚖️ 裁判</label>
+        <input type="number" id="maxTokJudge" min="200" max="16000" step="100" style="width:100%; padding:6px; background:#0f0f1a; border:1px solid #2a2a3a; color:#e5e7eb; border-radius:4px;">
+      </div>
+    </div>
+    <div style="margin-top:6px; font-size:11px; color:#6b7280;">
+      默认 历史学家=800 / 分析师=3000 / 质疑师=1500 / 裁判=2500。普通快速模型可调小到一半。
+    </div>
+  </div>
+</div>
+
+<hr class="divider">
+
+<div class="section">
+  <label>
+    交易背景（每次分析自动带入）
+    <span class="reset-prompt" id="resetBackground">恢复默认</span>
+  </label>
+  <textarea id="background" placeholder="例如：偏顺势交易，重点看MACD背离和RSI超买超卖…"></textarea>
+</div>
+
+<div class="section">
+  <label>
+    默认分析提示词（手动分析用）
+    <span class="reset-prompt" id="resetPrompt">恢复默认</span>
+  </label>
+  <textarea id="defaultPrompt"></textarea>
+</div>
+
+<hr class="divider">
+
+<div class="section">
+  <label style="margin-bottom:8px;display:block">🔧 分析增强（自动模式）v3.1</label>
+  <div id="enhToggles" style="display:flex;flex-direction:column;gap:6px">
+    <label class="enh-row"><input type="checkbox" id="enh-historian" checked>
+      <span class="enh-label">🏛️ 历史学家</span>
+      <span class="enh-desc">积累150条样本后激活，为分析师提供置信度校准参考</span></label>
+    <!-- v3.9: 震荡市风险提升已删除，质疑师提示词内置两套规则 -->
+    <label class="enh-row"><input type="checkbox" id="enh-symmetry" checked>
+      <span class="enh-label">⚖️ 正向证据强制</span>
+      <span class="enh-desc">要求质疑师的正向证据必须包含具体数值（如"ADX=28高于阈值"），禁止空洞表述；基础prompt已要求列证据，此开关进一步要求量化</span></label>
+  </div>
+  <div style="margin-top:8px;font-size:10px;color:#4a4e5a;line-height:1.5">
+    已废弃（v3.1移除）：分析师自我校准（未实现）、错误模式库（与偏差记忆重叠）、三维胜率注入（已废弃）
+  </div>
+</div>
+
+<hr class="divider">
+
+
+<button class="save-all" id="save">保存设置</button>
+<div class="saved" id="saved">✓ 已保存</div>
+<p class="tip">所有数据仅存储在本地浏览器，不上传任何服务器。</p>
+
+<hr class="divider">
+<div class="section">
+  <label>🔧 诊断工具</label>
+  <div class="diag-row">
+    <button class="diag-btn" id="diagExport" type="button">📋 导出最近日志</button>
+    <button class="diag-btn" id="diagCopy" type="button">📎 复制到剪贴板</button>
+  </div>
+  <div class="diag-status" id="diagStatus"></div>
+</div>
+
+<script src="storage-keys.js"></script>
+<script src="popup.js"></script>
+</body>
+</html>
