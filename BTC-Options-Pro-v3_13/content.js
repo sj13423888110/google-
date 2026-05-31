@@ -2609,7 +2609,8 @@
     return res;
   }
 
-  // 动态到期引擎：输出 5/10/15/30 之一（剥头皮在哪个周期交易由数据算，不默认锁定）
+  // 动态到期引擎：输出 5/10/15/30 之一。四档平权，纯按 动能续航+波动率+前方空间 决定，
+  //   不预设偏短或偏长，不因顺逆大周期而锁定（方向与期限是独立维度）。
   function _expiryEngine(res, ex, tr, ctx) {
     const support = ['5', '10', '15', '30'];   // 平台支持的到期(分钟)
     let score = 0;   // 越大→越长期限；越小→越短
@@ -2645,9 +2646,10 @@
       else if (nearest >= 3) { score += 1.5; why.push('空间大(' + nearest.toFixed(1) + 'ATR→长)'); }
     }
 
-    // ④ 入场类型：反转/逆风=快进快出(短)；顺风推进=可给时间展开(长)
-    if (ctx.headwind || res.phase === 'reversal_confirmed' || res.phase === 'counter_scalp') {
-      score -= 1.5; why.push('逆势/反转(快进快出→短)');
+    // ④ 入场类型：仅"明确反转/回踩反手"节奏快→适度偏短；逆大周期本身不压短(逆风也可能有大空间，
+    //    期限由空间+动能决定，不由顺逆背景预设——符合"高周期不限制期限")。
+    if (res.phase === 'reversal_confirmed' || res.phase === 'counter_scalp') {
+      score -= 1; why.push('反转/反手(节奏快→偏短)');
     } else if (ctx.tailwind) {
       score += 0.5;
     }
