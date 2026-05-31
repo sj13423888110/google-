@@ -2460,7 +2460,7 @@
     const moveDn = (ex.barsDirection3 === 'down' || ex.barsDirection3 === 'mostly_down');
 
     // ════ 三维加权评分(正=多/负=空)：斜率结构 S + 动能 M + 量能 V ════
-    // ① 斜率/结构 S —— Brooks "always-in" 骨架，权重最高（趋势是否延续/破坏看这里）
+    // ① 斜率/结构 S —— Brooks "always-in" 骨架，权重最高（趋势方向以结构为准，动能只做修正）
     let S = 0; const sEv = [];
     if (sw.structure === 'up') { S += 2; sEv.push('5M结构HH/HL'); }
     else if (sw.structure === 'down') { S -= 2; sEv.push('5M结构LH/LL'); }
@@ -2468,15 +2468,24 @@
     else if (ex.barsDirection5 === 'mostly_up') S += 1;
     else if (ex.barsDirection5 === 'down') S -= 2;
     else if (ex.barsDirection5 === 'mostly_down') S -= 1;
-    if (ex.trendBias === 'bullish') S += 1; else if (ex.trendBias === 'bearish') S -= 1;
+    // v3.13.6：trendBias 的 mild 档也给分（上涨/下跌初段最常见，原来只认 bullish/bearish 导致初段丢分）
+    if (ex.trendBias === 'bullish') S += 1.5;
+    else if (ex.trendBias === 'mild_bullish') S += 1;
+    else if (ex.trendBias === 'bearish') S -= 1.5;
+    else if (ex.trendBias === 'mild_bearish') S -= 1;
+    // v3.13.6：价格相对 EMA8/EMA21 的即时位置——最快反映当下斜向，补结构滞后
+    if (isFinite(ex.ema9) && isFinite(ex.ema21)) {
+      if (ex.price > ex.ema9 && ex.ema9 >= ex.ema21) { S += 1; sEv.push('价>EMA8>EMA21(即时偏多)'); }
+      else if (ex.price < ex.ema9 && ex.ema9 <= ex.ema21) { S -= 1; sEv.push('价<EMA8<EMA21(即时偏空)'); }
+    }
     if (sw.brokePrevLow)  { S -= 1; sEv.push('跌破前低'); }
     if (sw.brokePrevHigh) { S += 1; sEv.push('升破前高'); }
     if (sw.slopeFlatten)  { S = S * 0.6; sEv.push('斜率走平'); }
 
-    // ② 动能 M —— 拐点提前量（背离=对当前移动的反向预警）
+    // ② 动能 M —— 拐点提前量（降权：动能滞后，只做修正不主导方向）
     let M = 0; const mEv = [];
-    if (isFinite(ex.macdHist)) M += ex.macdHist > 0 ? 1 : ex.macdHist < 0 ? -1 : 0;
-    if (isFinite(f1.macdHist)) M += f1.macdHist > 0 ? 0.5 : f1.macdHist < 0 ? -0.5 : 0;
+    // v3.13.6：MACD 柱绝对符号滞后严重（上涨初段柱常还是负），权重砍半，避免把结构方向带反
+    if (isFinite(ex.macdHist)) M += ex.macdHist > 0 ? 0.5 : ex.macdHist < 0 ? -0.5 : 0;
     if (isFinite(ex.rsi)) { if (ex.rsi > 55) M += 1; else if (ex.rsi < 45) M -= 1; }
     if (ex.momDivergence === 'bear' || tr.momDivergence === 'bear') { M -= 1; mEv.push('顶背离'); }
     if (ex.momDivergence === 'bull' || tr.momDivergence === 'bull') { M += 1; mEv.push('底背离'); }
@@ -2485,6 +2494,9 @@
     else if (st === 'down_from_overbought') { M -= 1; mEv.push('StochRSI超买死叉'); }
     else if (st === 'cross_up') M += 0.5;
     else if (st === 'cross_down') M -= 0.5;
+    // v3.13.6：动能与结构冲突时，限制动能反向幅度——结构(Brooks)说了算，动能不能压过结构定方向
+    if (S > 0 && M < 0) M = Math.max(M, -1.5);
+    else if (S < 0 && M > 0) M = Math.min(M, 1.5);
 
     // ③ 量能 V —— VPA：确认当前这一段移动是否有量支撑（放量同向=真，缩量=无需求/无供给）
     let V = 0; const vEv = [];
