@@ -55,6 +55,14 @@
   let _ctxLostBannerShown = false;
   function _showCtxLostBanner(reason) {
     if (_ctxLostBannerShown) return;
+    // v3.13.4：真·上下文失效时 chrome.runtime.id 会变 undefined。
+    //   新页面正常载入时它有值——用它当守卫，避免注入时机/瞬时抖动导致"每次刷新都弹"。
+    try {
+      if (typeof chrome !== 'undefined' && chrome.runtime && chrome.runtime.id) {
+        // 上下文仍有效，是误报，不弹横幅
+        return;
+      }
+    } catch(_) { /* 访问 chrome.runtime 本身抛错才是真失效，继续弹 */ }
     _ctxLostBannerShown = true;
     try {
       const banner = document.createElement('div');
@@ -84,13 +92,14 @@
     });
   }
 
+  // v3.13.4：横幅只在"真·上下文失效"时弹。同步 throw 但非上下文失效（如注入时机早于
+  //   chrome.storage 就绪、patch 包装的边角异常）不再误弹横幅——这是"每次刷新都弹"的根因。
   function safeStorageGet(keys) {
     try {
       return _wrapStoragePromise(chrome.storage.local.get(keys), {}, 'get', keys);
     } catch(e) {
-      _showCtxLostBanner('storage.get sync throw');
-      // 上下文失效是预期场景（扩展更新后旧页面），不重复 warn 避免产生错误记录
-      if (!_isCtxInvalidated(e)) CtLog.warn('[storage:get:sync]', e.message || e, keys);
+      if (_isCtxInvalidated(e)) _showCtxLostBanner('storage.get failed');
+      else CtLog.warn('[storage:get:sync]', e.message || e, keys);
       return Promise.resolve({});
     }
   }
@@ -98,8 +107,8 @@
     try {
       return _wrapStoragePromise(chrome.storage.local.set(obj), undefined, 'set', Object.keys(obj || {}));
     } catch(e) {
-      _showCtxLostBanner('storage.set sync throw');
-      if (!_isCtxInvalidated(e)) CtLog.warn('[storage:set:sync]', e.message || e, Object.keys(obj || {}));
+      if (_isCtxInvalidated(e)) _showCtxLostBanner('storage.set failed');
+      else CtLog.warn('[storage:set:sync]', e.message || e, Object.keys(obj || {}));
       return Promise.resolve();
     }
   }
@@ -107,8 +116,8 @@
     try {
       return _wrapStoragePromise(chrome.storage.local.remove(keys), undefined, 'remove', keys);
     } catch(e) {
-      _showCtxLostBanner('storage.remove sync throw');
-      if (!_isCtxInvalidated(e)) CtLog.warn('[storage:remove:sync]', e.message || e, keys);
+      if (_isCtxInvalidated(e)) _showCtxLostBanner('storage.remove failed');
+      else CtLog.warn('[storage:remove:sync]', e.message || e, keys);
       return Promise.resolve();
     }
   }

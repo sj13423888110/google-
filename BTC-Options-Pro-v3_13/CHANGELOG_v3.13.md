@@ -106,3 +106,19 @@
 - 逆风反转+波动大+目标近 → 5M
 - 顺风但目标近 → 10M
 - 挤压突破+强动能 → 30M
+
+
+---
+
+# v3.13.4 修复"每次刷新插件都弹上下文失效横幅"
+
+## 问题
+在 chrome://extensions 刷新扩展后，页面每次都弹"⚠️ GOODLE 扩展已更新或上下文失效 (storage.get sync throw)"，即使新内容已正常载入。
+
+## 根因
+横幅逻辑过于激进：`safeStorageGet/Set/Remove` 的同步 catch 里，**任何**同步异常（包括 content.js 注入时机早于 chrome.storage 就绪、patch 包装的瞬时边角异常）都会弹横幅，把"正常新载入的瞬时抖动"误判成"上下文失效"。
+
+## 修复
+1. 同步 catch：只有 `_isCtxInvalidated(e)` 为真（错误信息确含"Extension context invalidated"等）才弹横幅，其余静默 warn。
+2. `_showCtxLostBanner` 增加守卫：弹之前检查 `chrome.runtime.id`——真·上下文失效时它才会变 undefined；新页面正常载入时它有值，于是不弹。
+3. 结果：扩展更新后只有**真正残留的旧页面**会提示刷新；正常刷新/重载不再误弹。
