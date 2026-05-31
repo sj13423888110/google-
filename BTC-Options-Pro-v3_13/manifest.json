@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
   "name": "BTC Options Pro Analyzer v2",
-  "version": "3.13.2",
-  "description": "Binance 二元期权 4-Agent（v3.13.2: 纯剥头皮模式——执行周期(1M/5M)定方向，大周期(15M/30M)只作顺风/逆风加减分绝不否决；逆大周期照做但缩5M期限快进快出；不再被大周期锁死）",
+  "version": "3.13.3",
+  "description": "Binance 二元期权 4-Agent（v3.13.3: 动态到期引擎——到期周期由测量移动+动能续航+波动率+到关键位距离算出(5/10/15/30动态)，与方向同等重要不锁死；执行周期定方向，大周期不否决）",
   "permissions": [
     "activeTab",
     "storage",

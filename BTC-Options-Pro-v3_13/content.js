@@ -2536,25 +2536,90 @@
       setDir(opDir);
       res.confirmed = true;
       if (tailwind) {
-        res.phase = 'impulse'; res.contBias = 2; res.suggestExpiry = 5;
+        res.phase = 'impulse'; res.contBias = 2;
         res.evidence = ['执行周期' + (upMove ? '多' : '空') + '(op=' + opScore + ')', '大周期顺风'].concat(sEv.slice(0, 1));
-        res.label = '顺风推进(执行周期主导，可短打)';
+        res.label = '顺风推进(执行周期主导)';
       } else if (headwind) {
         // 逆大周期 = 典型剥头皮反手/反转单：方向照给，缩期限快进快出
         const flipped = sw.brokePrevLow || sw.brokePrevHigh || ex.volRegime === 'expanding';
         res.phase = flipped ? 'reversal_confirmed' : 'counter_scalp';
-        res.retraceType = 'reversal'; res.contBias = 1; res.suggestExpiry = 5;
+        res.retraceType = 'reversal'; res.contBias = 1;
         res.evidence = ['执行周期' + (upMove ? '多' : '空') + '(op=' + opScore + ')',
-                        '逆大周期(背景' + (bgUp ? '涨' : '跌') + ')，缩期限快进快出'].concat(mEv.slice(0, 1));
-        res.label = flipped ? '反转确认(执行周期破位/放量，逆大周期反手)' : '逆风剥头皮(执行周期主导，短打降注)';
+                        '逆大周期(背景' + (bgUp ? '涨' : '跌') + ')'].concat(mEv.slice(0, 1));
+        res.label = flipped ? '反转确认(执行周期破位/放量，逆大周期反手)' : '逆风剥头皮(执行周期主导)';
       } else {
         // 大周期中性：纯看执行周期
-        res.phase = 'impulse'; res.contBias = 2; res.suggestExpiry = 5;
+        res.phase = 'impulse'; res.contBias = 2;
         res.evidence = ['执行周期' + (upMove ? '多' : '空') + '(op=' + opScore + ')', '大周期中性'];
         res.label = '执行周期主导(大周期中性)';
       }
     }
+
+    // ════ 动态到期周期引擎（书的核心：测量移动 measured move + 动能续航 + 波动率）════
+    //   到期时长 = 这段方向"能维持多久"的时间投影，与方向同等重要，不锁死。
+    //   依据：①动能续航(|op|越强→走得越久→可长) ②波动率(ATR/bbw大→快速兑现→宜短)
+    //         ③到关键位距离(measured move：目标位近→短，远→长) ④入场类型(反转/逆风→快进快出→短)
+    if (res.tradeDir) {
+      res.suggestExpiry = _expiryEngine(res, ex, tr, { tailwind: tailwind, headwind: headwind, opScore: opScore, upMove: upMove });
+    } else {
+      res.suggestExpiry = null;
+    }
     return res;
+  }
+
+  // 动态到期引擎：输出 5/10/15/30 之一（剥头皮在哪个周期交易由数据算，不默认锁定）
+  function _expiryEngine(res, ex, tr, ctx) {
+    const support = ['5', '10', '15', '30'];   // 平台支持的到期(分钟)
+    let score = 0;   // 越大→越长期限；越小→越短
+    const why = [];
+
+    // ① 动能续航：|op| 合力越强，趋势越能延续，可给更长到期
+    const absOp = Math.abs(ctx.opScore);
+    if (absOp >= 8)      { score += 2; why.push('动能极强'); }
+    else if (absOp >= 6) { score += 1.5; why.push('动能强'); }
+    else if (absOp >= 4) { score += 0.5; }
+    else                 { score -= 0.5; why.push('动能一般'); }
+
+    // ② 波动率(measured move 的速度)：ATR/价格 越大，价格兑现越快 → 宜短
+    const atrPct = (isFinite(ex.atr) && isFinite(ex.price) && ex.price > 0) ? ex.atr / ex.price * 100 : null;
+    if (atrPct != null) {
+      if (atrPct >= 0.35)      { score -= 1.5; why.push('波动大(快速兑现→短)'); }
+      else if (atrPct >= 0.2)  { score -= 0.5; }
+      else                     { score += 1; why.push('波动小(需时间→长)'); }
+    }
+    // bbw 极窄(挤压)：突破后常有持续行情，可略长
+    if (isFinite(ex.bbw) && ex.bbw < 0.8) { score += 0.5; why.push('带宽窄(蓄势)'); }
+
+    // ③ 到关键位距离(measured move 目标)：顺势方向前方最近阻挡有多远(ATR)
+    const d = ex.dist || {};
+    const fwd = ctx.upMove
+      ? [d.prevHigh_atr, d.roundLevel_atr, d.bbUpper_atr]   // 做多看上方阻力(正值=在上方)
+      : [d.prevLow_atr, d.roundLevel_atr, d.bbLower_atr];   // 做空看下方支撑(负值=在下方)
+    const fwdDists = fwd.filter(v => isFinite(v)).map(v => Math.abs(v)).filter(v => v > 0.05);
+    if (fwdDists.length) {
+      const nearest = Math.min.apply(null, fwdDists);
+      if (nearest <= 1)      { score -= 1.5; why.push('目标位近(' + nearest.toFixed(1) + 'ATR→短)'); }
+      else if (nearest >= 3) { score += 1.5; why.push('空间大(' + nearest.toFixed(1) + 'ATR→长)'); }
+    }
+
+    // ④ 入场类型：反转/逆风=快进快出(短)；顺风推进=可给时间展开(长)
+    if (ctx.headwind || res.phase === 'reversal_confirmed' || res.phase === 'counter_scalp') {
+      score -= 1.5; why.push('逆势/反转(快进快出→短)');
+    } else if (ctx.tailwind) {
+      score += 0.5;
+    }
+    // 力竭附近(伸展)即使做也要短
+    const dEma = ex.dist && isFinite(ex.dist.ema21_atr) ? ex.dist.ema21_atr : null;
+    if (dEma != null && Math.abs(dEma) >= 1.8) { score -= 1; why.push('已伸展→短'); }
+
+    // 映射到档位：score → 5/10/15/30
+    let idx;
+    if (score <= -1.5)     idx = 0; // 5M
+    else if (score < 1)    idx = 1; // 10M
+    else if (score < 2.5)  idx = 2; // 15M
+    else                   idx = 3; // 30M
+    res.expiryWhy = why.join('、') || '中性';
+    return parseInt(support[idx]);
   }
 
   function _buildBinaryFeaturePayload(symbol) {
@@ -2649,13 +2714,11 @@
       _phaseNote = _phase.label || '方向不清，相位模型不介入';
     }
 
-    // 期限：相位优先；suppress→观望；有 tradeDir 用其建议期限；否则回落总分启发
+    // 期限：完全由动态到期引擎(phase.suggestExpiry)决定，不再有默认锁
     const _expirySuggest = (_phase.confirmed && _phase.suppress)
       ? '观望（相位：' + _phase.label + '）'
       : (_phase.confirmed && _phase.tradeDir && _phase.suggestExpiry)
-      ? (_phase.suggestExpiry + '分钟（相位：' + _phase.label + '）')
-      : Math.abs(_totalScore3) >= 4 ? '15/30分钟（信号强）'
-      : Math.abs(_totalScore3) >= 2 ? '10/15分钟（信号中等）'
+      ? (_phase.suggestExpiry + '分钟（' + (_phase.expiryWhy || '动能/波动/空间综合') + '）')
       : '观望（信号不足）';
 
     const layeredScore = {
@@ -2718,14 +2781,8 @@
            '  当前相位：' + (_ph.label || _ph.phase) + '\n' +
            '  依据：' + ((_ph.evidence && _ph.evidence.length) ? _ph.evidence.join('、') : '—') + '\n' +
            '  决策含义：' + (_ph.suppress
-              ? ('⛔ 观望——' + (_ph.phase === 'exhaustion' ? '力竭区(防追顶/底)' : '回踩进行中(等回踩结束或反转确认，勿在途中接刀)'))
-              : _ph.phase === 'reversal_confirmed'
-              ? ('🔄 反转确认，顺执行周期方向【' + _tradeTxt + '】(可反手，结构破位/放量为据，建议' + (_ph.suggestExpiry || 10) + '分钟)')
-              : _ph.phase === 'retrace_end'
-              ? ('✅ 回踩结束，强顺势【' + _tradeTxt + '】(短周期可入，建议' + (_ph.suggestExpiry || 10) + '分钟)')
-              : _ph.phase === 'impulse'
-              ? ('✅ 推进段顺势【' + _tradeTxt + '】(回撤后入场勿追顶/底，建议' + (_ph.suggestExpiry || 10) + '分钟)')
-              : ('方向不清，观望')) + '\n')
+              ? ('⛔ 观望——' + (_ph.phase === 'exhaustion' ? '力竭区(防接最后一棒)' : '方向不清'))
+              : ('✅ ' + _tradeTxt + '｜建议到期 ' + (_ph.suggestExpiry || '—') + '分钟（依据：' + (_ph.expiryWhy || '动能/波动/空间综合') + '）｜' + (_ph.label || _ph.phase))) + '\n')
         : ('  ' + (ls.phaseNote || '方向不清，相位模型不介入') + '\n'));
 
     const summary = phaseBlock + '\n【量化评分（三层打分）】\n' +
