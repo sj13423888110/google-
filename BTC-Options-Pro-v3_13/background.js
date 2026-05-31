@@ -157,6 +157,20 @@ function makeKlineSig(klineText, marketState, dataTimestamp) {
   ].join('_');
 }
 
+// v3.13.5：历史学家专用"粗签名"（只3维），与 makeKlineSig(18维,用于缓存key)分离。
+//   18维签名空间太大，"sim≥4且≥10条同类"几乎永远凑不齐 → 历史学家长期沉默。
+//   粗签名只取最本质3维：相位 + 可交易方向 + 市场态，让同类案例能攒够、可比。
+//   满分=3；历史学家要求 sim≥2 且 ≥10 条才给有效结论，不足则明说"样本不足、仅参考、不调置信度"。
+function makeCoarseSig(klineText, marketState) {
+  const payload = extractBinaryFeaturePayload(klineText || '');
+  const ls = payload && payload.layered_score || null;
+  const ph = ls && ls.phase || null;
+  const phaseSig = ph && ph.phase ? ph.phase : 'p?';
+  const dirSig = ph && ph.tradeDir ? ph.tradeDir : (ph && ph.bgDir ? ph.bgDir : 'd?');
+  const ms = marketState || (payload && payload.feature_pool && payload.feature_pool['5m'] && payload.feature_pool['5m'].marketState) || '?';
+  return [phaseSig, dirSig, ms].join('_');
+}
+
 
 function extractBinaryFeaturePayload(klineText) {
   if (!klineText || typeof klineText !== 'string') return null;
@@ -450,7 +464,7 @@ const KEEPALIVE_ALARM = 'tvc-keepalive';
 // ── 元裁判 alarm ──────────────────────────────────────────────────
 // 每 META_JUDGE_EVERY 条已验证 session 触发一次深度审计
 const META_JUDGE_ALARM = 'tvc-meta-judge';
-const META_JUDGE_EVERY = 15; // v3.12.4: 每 15 条已验证记录触发一次（含Binance回测，更及时）
+const META_JUDGE_EVERY = 30; // v3.13.5: 15→30。样本翻倍使分桶统计更可信，且触发频率减半=省一半token。
 let _metaJudgeRunning = false; // 全局标志：元裁判正在运行时主流程等待
 
 function startKeepAliveAlarm() {
@@ -3189,10 +3203,10 @@ async function runHistorianAgent(autoSessions, klineText, tabId, skipCache) {
     }
     return sc;
   }
-  const _curSigForRank = sig; // 当前 K 线签名，已在前面计算
+  const _curSigForRank = makeCoarseSig(klineText, curMarket); // v3.13.5：用3维粗签名比对（满分3）
   const ranked = verified
     .map(sx => {
-      const _sx_sig = makeKlineSig(sx.klineText, sx.marketState, sx.dataTimestamp);
+      const _sx_sig = makeCoarseSig(sx.klineText, sx.marketState);
       return { s: sx, sig: _sx_sig, score: _scoreSig(_curSigForRank, _sx_sig) };
     })
     .sort((x, y) => {
@@ -3201,18 +3215,15 @@ async function runHistorianAgent(autoSessions, klineText, tabId, skipCache) {
       return (y.s.dataTimestamp || 0) - (x.s.dataTimestamp || 0);
     });
 
-  // 只取相似度 ≥ 4（一半维度匹配）的案例；不足 6 条时全用
-  const candidatePool = ranked.filter(r => r.score >= 4);
+  // v3.13.5：粗签名满分3，相似要求 sim≥2（3维中至少2维相同：如相位+方向 或 相位+市场态）
+  const candidatePool = ranked.filter(r => r.score >= 2);
 
-  // v3.1: 若相似案例不足10条，说明当前签名桶样本稀疏，历史学家输出意义不大，跳过
-  if (candidatePool.length < HISTORIAN_MIN_BUCKET_MATCHES && !skipCache) {
-    if (tabId) {
-      const _msgSparse = '📭 历史学家：当前市场结构（' + sig + '）相似案例不足' + HISTORIAN_MIN_BUCKET_MATCHES + '条（当前' + candidatePool.length + '条），跳过，继续积累中。';
-      chrome.tabs.sendMessage(tabId, { type: 'STREAM_CHUNK', chunk: _msgSparse, source: 'auto_historian' }).catch(() => {});
-      chrome.tabs.sendMessage(tabId, { type: 'STREAM_DONE', source: 'auto_historian' }).catch(() => {});
-    }
-    return '';
-  }
+  // v3.13.5：相似案例不足时不再沉默，而是降级输出——明确告知"样本不足、仅供参考、不得用于调整置信度"。
+  //   这样数据少时历史学家诚实标注不可信(避免少样本噪音误导)，够10条才允许影响置信度。
+  const bucketLow = candidatePool.length < HISTORIAN_MIN_BUCKET_MATCHES;
+  const confidenceNote = bucketLow
+    ? '⚠️【低可信】同类样本仅' + candidatePool.length + '条(<' + HISTORIAN_MIN_BUCKET_MATCHES + ')，胜率统计为噪声级，仅供参考，禁止据此调整置信度。'
+    : '【可用】同类样本' + candidatePool.length + '条，统计有参考价值。';
 
   const finalCases = (candidatePool.length >= 3 ? candidatePool : ranked).slice(0, 6);
 
@@ -3258,7 +3269,7 @@ async function runHistorianAgent(autoSessions, klineText, tabId, skipCache) {
 
     const sumM = (sx.result || '').match(/【信号摘要】(.{0,80})/);
     const sum = sumM ? sumM[1].trim() : '（无摘要）';
-    return `【案例${i+1}】sim=${r.score}/8 | ${sx.time || ''} | ${sx.marketState || '不明'}·${_bandLabel} | ${roleStr} | ${sum}`;
+    return `【案例${i+1}】sim=${r.score}/3 | ${sx.time || ''} | ${sx.marketState || '不明'}·${_bandLabel} | ${roleStr} | ${sum}`;
   }).join('\n');
 
   // 使用用户在设置面板配置的提示词（若未设置则用顶层 DEFAULT_HISTORIAN_PROMPT）
@@ -3266,12 +3277,13 @@ async function runHistorianAgent(autoSessions, klineText, tabId, skipCache) {
   const historianSysPrompt = (storedHPrompt && storedHPrompt.trim()) ? storedHPrompt : DEFAULT_HISTORIAN_PROMPT;
   const historianPrompt = historianSysPrompt + '\n\n' +
     '【当前行情数据】\n' + (klineText || '（无数据）') + '\n\n' +
+    '【样本可信度】' + confidenceNote + '\n\n' +
     '【历史档案（最近' + verified.slice(0,15).length + '条已验证记录）】\n' + cases + '\n\n' +
     '请完成以下三项任务（简洁，总字数不超过200字）：\n' +
-    '1. 找出与当前行情最相似的1-3个历史案例，说明相似点（市场状态、RSI区间、MACD方向等）\n' +
+    '1. 找出与当前行情最相似的1-3个历史案例，说明相似点（相位、可交易方向、市场状态）\n' +
     '2. 基于这些案例总结：当前这种市场环境的历史胜率和规律\n' +
-    '3. 给本次分析师一条具体可执行的建议（如"此类震荡+RSI超买组合历史上3次全败，建议置信度≤55%"）\n\n' +
-    '输出格式：\n【相似案例】\n【历史规律】\n【给分析师的建议】';
+    '3. 给本次分析师一条建议；★若【样本可信度】为低可信，必须在建议里写明"样本不足仅供参考，不据此调整置信度"\n\n' +
+    '输出格式：\n【相似案例】\n【顺势胜率】\n【给分析师的建议】';
 
   // 读取历史学家模型配置
   // v2.6: 越界自动回退默认模型 + WARN，避免静默拿"最后一个"凑数导致跑错模型
