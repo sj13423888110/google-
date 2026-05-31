@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
   "name": "BTC Options Pro Analyzer v2",
-  "version": "3.13.9",
-  "description": "Binance 二元期权 4-Agent（v3.13.3: 动态到期引擎——到期周期由测量移动+动能续航+波动率+到关键位距离算出(5/10/15/30动态)，与方向同等重要不锁死；执行周期定方向，大周期不否决）",
+  "version": "3.14.0",
+  "description": "Binance 二元期权 4-Agent（v3.14: 架构转向LLM主导——规则引擎降为参考信号，方向/可否/期限由分析师·质疑师·裁判独立判断并相互纠错；代码只保留真死盘+保本线两道硬安全线）",
   "permissions": [
     "activeTab",
     "storage",

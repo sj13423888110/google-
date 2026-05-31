@@ -2817,16 +2817,17 @@
                  : _ph.bgDir === 'mild_bullish' ? '偏多' : _ph.bgDir === 'mild_bearish' ? '偏空' : '中性';
     const _tradeTxt = _ph.tradeDir === 'bullish' ? '看涨' : _ph.tradeDir === 'bearish' ? '看跌' : '—';
     const _scTxt = _ph.scores ? ('执行周期合力op=' + _ph.scores.op + '（斜率结构S' + _ph.scores.S + ' 动能M' + _ph.scores.M + ' 量能V' + _ph.scores.V + '）') : '—';
-    const phaseBlock = '\n【相位判定（第一权重，先看这个）】\n' +
+    const phaseBlock = '\n【相位参考信号（仅供参考，最终由你独立判断，可推翻）】\n' +
       (_ph.confirmed
         ? ('  高周期背景(15M+30M)：' + _bgTxt + '\n' +
            '  ' + _scTxt + '\n' +
-           '  当前相位：' + (_ph.label || _ph.phase) + '\n' +
+           '  规则引擎倾向：' + (_ph.label || _ph.phase) + '\n' +
            '  依据：' + ((_ph.evidence && _ph.evidence.length) ? _ph.evidence.join('、') : '—') + '\n' +
-           '  决策含义：' + (_ph.suppress
-              ? ('⛔ 观望——' + (_ph.phase === 'exhaustion' ? '力竭区(防接最后一棒)' : '方向不清'))
-              : ('✅ ' + _tradeTxt + '｜建议到期 ' + (_ph.suggestExpiry || '—') + '分钟（依据：' + (_ph.expiryWhy || '动能/波动/空间综合') + '）｜' + (_ph.label || _ph.phase))) + '\n')
-        : ('  ' + (ls.phaseNote || '方向不清，相位模型不介入') + '\n'));
+           '  引擎参考意见：' + (_ph.suppress
+              ? ('倾向观望——' + (_ph.phase === 'exhaustion' ? '力竭区(防接最后一棒)' : _ph.phase === 'no_room' ? '顺势方向前方空间不足(贴阻力/支撑)' : '方向不清'))
+              : ('倾向 ' + _tradeTxt + '｜参考到期 ' + (_ph.suggestExpiry || '—') + '分钟（' + (_ph.expiryWhy || '动能/波动/空间综合') + '）')) +
+           '\n  ⚠️这是规则引擎的机械计算，可能误判(如贴阻力追多、把回踩当反转)。请结合下方原始K线与指标自行判断，有不同看法时以你的分析为准并说明理由。\n')
+        : ('  ' + (ls.phaseNote || '方向不清') + '（规则引擎参考，可推翻）\n'));
 
     const summary = phaseBlock + '\n【量化评分（三层打分）】\n' +
       '  1H方向权重：' + (ls1h.score != null ? (ls1h.score > 0 ? '+' : '') + ls1h.score : '—') +
@@ -2839,7 +2840,7 @@
       '  硬否决项：' + vetoText + '\n' +
       '  总分(已含相位调整)：' + (lsTotal > 0 ? '+' : '') + lsTotal + (ls.phaseNote ? '（' + ls.phaseNote + '）' : '') + '  建议期限参考：' + (ls.expirySuggest || '—') + '\n' +
       '\n【期限候选】\n' + candidateLines + '\n' +
-      '  注：相位判定优先于总分；方向和置信度由分析师LLM独立判断\n';
+      '  注：以上相位/评分均为规则引擎的【参考信号】，非命令。方向、是否入场、期限由你(分析师LLM)结合原始K线与多周期指标【独立判断】，可推翻引擎倾向，但须说明理由。\n';
     return {
       payload,
       combinedText: legacyText + summary + '\n【BINARY_OPTIONS_FEATURES_V2】' + JSON.stringify(payload) + '【/BINARY_OPTIONS_FEATURES_V2】\n'
