@@ -161,12 +161,14 @@ function makeKlineSig(klineText, marketState, dataTimestamp) {
 //   18维签名空间太大，"sim≥4且≥10条同类"几乎永远凑不齐 → 历史学家长期沉默。
 //   粗签名只取最本质3维：相位 + 可交易方向 + 市场态，让同类案例能攒够、可比。
 //   满分=3；历史学家要求 sim≥2 且 ≥10 条才给有效结论，不足则明说"样本不足、仅参考、不调置信度"。
-function makeCoarseSig(klineText, marketState) {
-  const payload = extractBinaryFeaturePayload(klineText || '');
+function makeCoarseSig(klineText, marketState, payloadObj) {
+  // v3.13.7：优先用已存的结构化 payload 对象(session.structuredPayload)，
+  //   避免从 klineText 正则重解析失败导致签名退化为 p?_d?_?（这是"81笔却样本不足"的根因）。
+  const payload = payloadObj || extractBinaryFeaturePayload(klineText || '');
   const ls = payload && payload.layered_score || null;
   const ph = ls && ls.phase || null;
   const phaseSig = ph && ph.phase ? ph.phase : 'p?';
-  const dirSig = ph && ph.tradeDir ? ph.tradeDir : (ph && ph.bgDir ? ph.bgDir : 'd?');
+  const dirSig = ph && (ph.tradeDir || ph.trendDir) ? (ph.tradeDir || ph.trendDir) : (ph && ph.bgDir ? ph.bgDir : 'd?');
   const ms = marketState || (payload && payload.feature_pool && payload.feature_pool['5m'] && payload.feature_pool['5m'].marketState) || '?';
   return [phaseSig, dirSig, ms].join('_');
 }
@@ -3146,7 +3148,7 @@ async function runHistorianAgent(autoSessions, klineText, tabId, skipCache) {
   // 用户要求更早介入做参考，因此把“待积累样本”从30条改成6条；
   // 具体相似桶仍保留单独门槛，避免样本太少时胡乱类比。
   const HISTORIAN_MIN_GLOBAL_SAMPLES = 6;
-  const HISTORIAN_MIN_BUCKET_MATCHES = 10; // 签名相似度≥4的案例至少10条
+  const HISTORIAN_MIN_BUCKET_MATCHES = 6; // v3.13.7: 10→6，同类满6条即给结论(分级标注可信度)，更早介入
 
   if (verified.length < HISTORIAN_MIN_GLOBAL_SAMPLES) {
     const remaining = HISTORIAN_MIN_GLOBAL_SAMPLES - verified.length;
@@ -3203,10 +3205,12 @@ async function runHistorianAgent(autoSessions, klineText, tabId, skipCache) {
     }
     return sc;
   }
-  const _curSigForRank = makeCoarseSig(klineText, curMarket); // v3.13.5：用3维粗签名比对（满分3）
+  const _curPayload = extractBinaryFeaturePayload(klineText || '');
+  const _curSigForRank = makeCoarseSig(klineText, curMarket, _curPayload); // v3.13.7：当前粗签名(优先payload对象)
   const ranked = verified
     .map(sx => {
-      const _sx_sig = makeCoarseSig(sx.klineText, sx.marketState);
+      // v3.13.7：历史样本优先用已存的 structuredPayload 对象算签名，不重解析klineText(易失败)
+      const _sx_sig = makeCoarseSig(sx.klineText, sx.marketState, sx.structuredPayload);
       return { s: sx, sig: _sx_sig, score: _scoreSig(_curSigForRank, _sx_sig) };
     })
     .sort((x, y) => {
@@ -3218,12 +3222,14 @@ async function runHistorianAgent(autoSessions, klineText, tabId, skipCache) {
   // v3.13.5：粗签名满分3，相似要求 sim≥2（3维中至少2维相同：如相位+方向 或 相位+市场态）
   const candidatePool = ranked.filter(r => r.score >= 2);
 
-  // v3.13.5：相似案例不足时不再沉默，而是降级输出——明确告知"样本不足、仅供参考、不得用于调整置信度"。
-  //   这样数据少时历史学家诚实标注不可信(避免少样本噪音误导)，够10条才允许影响置信度。
-  const bucketLow = candidatePool.length < HISTORIAN_MIN_BUCKET_MATCHES;
-  const confidenceNote = bucketLow
-    ? '⚠️【低可信】同类样本仅' + candidatePool.length + '条(<' + HISTORIAN_MIN_BUCKET_MATCHES + ')，胜率统计为噪声级，仅供参考，禁止据此调整置信度。'
-    : '【可用】同类样本' + candidatePool.length + '条，统计有参考价值。';
+  // v3.13.7：三级可信度。<6条=低可信(仅参考不调置信度)；6-9条=中等；≥10条=高可信(可影响置信度)。
+  const _bn = candidatePool.length;
+  const bucketLow = _bn < 6;
+  const confidenceNote = _bn < 6
+    ? '⚠️【低可信】同类样本仅' + _bn + '条(<6)，胜率为噪声级，仅供参考，禁止据此调整置信度。'
+    : _bn < 10
+    ? '【中等可信】同类样本' + _bn + '条(6-9)，有一定参考价值，置信度调整幅度≤3%。'
+    : '【高可信】同类样本' + _bn + '条(≥10)，统计可靠，可据此调整置信度。';
 
   const finalCases = (candidatePool.length >= 3 ? candidatePool : ranked).slice(0, 6);
 

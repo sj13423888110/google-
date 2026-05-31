@@ -162,3 +162,22 @@
 
 ## 重要：诊断可见
 相位判定块已显示 `op=? S?/M?/V?`。下次若仍判反，请把该行数值发我——可精确定位是哪一项带反方向，无需猜。
+
+
+---
+
+# v3.13.7 修复"81笔却样本不足"（历史学家签名退化）
+
+## 根因
+历史学家比对用 `makeCoarseSig(sx.klineText)` 从 klineText **正则重解析** payload 来生成 3 维签名(相位+方向+市场态)。但：
+1. 正则解析 klineText 容易失败 → 签名退化成 `p?_d?_?`
+2. 退化签名与当前签名 sim 极低 → 同类案例几乎为 0 → 81 笔也"样本不足"
+
+## 修复
+1. `makeCoarseSig` 增加第 3 参数：**优先用已存的 `session.structuredPayload` 对象**，不再依赖正则重解析 klineText。
+2. 历史样本比对时传入 `sx.structuredPayload`，当前样本传入解析好的 payload。
+3. dirSig 同时认 `tradeDir`/`trendDir`/`bgDir`，兼容不同版本数据。
+4. bucket 门槛 10→6，三级可信度：<6条=低可信(不调置信度)、6-9条=中等(≤3%)、≥10条=高可信。
+
+## 对存量数据的限制（必须知道）
+v3.13.7 之前存的老 session，其 structuredPayload 可能是**旧相位结构**(无 phase.phase/tradeDir)，签名仍会退化。**这部分老数据无法追溯修复**，只有 v3.13.7 之后新产生的 session 才带正确签名。所以历史学家的"高可信"结论需要新数据重新积累一段时间。
