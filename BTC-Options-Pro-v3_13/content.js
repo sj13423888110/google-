@@ -2556,9 +2556,32 @@
       .filter(v => upMove ? v > 0 : v < 0)
       .map(v => Math.abs(v));
     const fwdRoom = fwdRoomList.length ? Math.min.apply(null, fwdRoomList) : null;
-    const noRoom = fwdRoom != null && fwdRoom <= 0.3;       // 贴脸阻挡：≤0.3ATR
+    const noRoom = fwdRoom != null && fwdRoom <= 0.5;       // v3.16 贴脸阻挡放宽：≤0.5ATR(原0.3几乎不触发)
     const tightRoom = fwdRoom != null && fwdRoom <= 0.8;     // 空间偏小：≤0.8ATR
     res.fwdRoom = fwdRoom;
+
+    // ════ v3.16 修复①：趋势市"追最后一棒"闸（晚入场是趋势市33%胜率的主因）════
+    //   ADX≥25 成熟趋势 + 价格已伸展(离EMA21≥1.5ATR) + 无"回撤结束"新鲜反向确认
+    //   (StochRSI转回/背离/反包/拒绝针/破前高低) → 这是追最后一棒，按五本书"回撤结束才入场"应观望。
+    //   仍有新鲜确认→照常入场(不误伤健康回撤后顺势/突破创新高)；不设op上限——
+    //   op越高=趋势越成熟越拥挤越伸展，正是最该等回撤的晚入场区(若仍在创新高brokePrevHigh则算新鲜确认不拦)。
+    const adxEx = isFinite(ex.adx) ? ex.adx : null;
+    const matureTrend = adxEx != null && adxEx >= 25;
+    const stretchMild = dEma != null && (upMove ? dEma >= 1.5 : dEma <= -1.5);
+    const freshPullbackEnd = upMove
+      ? ((st === 'up_from_oversold') || ex.momDivergence === 'bull' || tr.momDivergence === 'bull'
+         || ex.engulfing === 'bullish' || tr.engulfing === 'bullish'
+         || ex.pinBar === 'bullish_pin' || tr.pinBar === 'bullish_pin' || sw.brokePrevHigh)
+      : ((st === 'down_from_overbought') || ex.momDivergence === 'bear' || tr.momDivergence === 'bear'
+         || ex.engulfing === 'bearish' || tr.engulfing === 'bearish'
+         || ex.pinBar === 'bearish_pin' || tr.pinBar === 'bearish_pin' || sw.brokePrevLow);
+    const lateChase = matureTrend && stretchMild && !freshPullbackEnd;
+
+    // ════ v3.16 修复②：逆"强背景"反手接飞刀闸 ════
+    //   执行周期逆15M+30M强一致背景(|bg|≥4)反手，却无结构破位/无放量确认，且合力不强(|op|<3.5)
+    //   → 接飞刀(烂信号)，观望；等结构破位或放量确认再反手。
+    const flippedConfirm = sw.brokePrevLow || sw.brokePrevHigh || ex.volRegime === 'expanding';
+    const counterKnife = headwind && !flippedConfirm && Math.abs(bgSign) >= 4 && Math.abs(opScore) < 3.5;
 
     if (opDir === 'neutral') {
       // 执行周期合力不足 → 真没方向，观望（剥头皮唯一的方向性观望）
@@ -2566,13 +2589,31 @@
       res.trendDir = null; res.tradeDir = null; res.trendSign = 0; res.suggestExpiry = null;
       res.evidence = ['执行周期合力不足(op=' + opScore + ')，无明确方向'];
       res.label = '方向不清(观望)';
-    } else if (Math.abs(opScore) >= 4 && (atExtreme || stretch) && exhaustSignals.length >= 2) {
-      // 力竭：合力强但已伸展到极值 + ≥2项衰竭 → 短暂观望防接最后一棒（门槛高，少触发）
+    } else if (Math.abs(opScore) >= 4 && (atExtreme || stretch) && exhaustSignals.length >= 1) {
+      // 力竭：合力强 + 已伸展到极值 + ≥1项衰竭 → 观望防接最后一棒（v3.16：衰竭信号2→1，更早拦力竭）
       res.confirmed = true; res.phase = 'exhaustion'; res.suppress = true;
       res.trendDir = opDir; res.tradeDir = null; res.trendSign = 0;
       res.contBias = 0; res.suggestExpiry = null;
       res.evidence = ['伸展到极值'].concat(exhaustSignals);
       res.label = '力竭区(短暂观望，防接最后一棒)';
+    } else if (lateChase) {
+      // v3.16 修复①：趋势已伸展但无回撤结束确认 → 追最后一棒，观望等回撤结束反向确认再顺势入
+      res.confirmed = true; res.phase = 'late_chase'; res.suppress = true;
+      res.trendDir = opDir; res.tradeDir = null; res.trendSign = 0;
+      res.contBias = 0; res.suggestExpiry = null;
+      res.evidence = ['趋势市(ADX=' + (adxEx != null ? adxEx.toFixed(0) : '?') + ')已伸展'
+                      + (dEma != null ? dEma.toFixed(1) : '?') + 'ATR离EMA21',
+                      '无回撤结束确认，追=接最后一棒',
+                      '等回撤结束(反向拒绝针/反包/动能转回)再顺势入'];
+      res.label = '趋势伸展无确认(观望，等回撤结束)';
+    } else if (counterKnife) {
+      // v3.16 修复②：逆强背景反手但无破位/放量确认 → 接飞刀，观望
+      res.confirmed = true; res.phase = 'counter_knife'; res.suppress = true;
+      res.trendDir = opDir; res.tradeDir = null; res.trendSign = 0;
+      res.contBias = 0; res.suggestExpiry = null;
+      res.evidence = ['逆强背景(bg=' + bgSign + ')反手但无破位/放量确认',
+                      '合力不足(op=' + opScore + ')，接飞刀风险', '等破位/放量确认再反手'];
+      res.label = '逆强背景反手无确认(观望，勿接飞刀)';
     } else if (noRoom && Math.abs(opScore) < 6) {
       // v3.13.9 前方空间闸：顺势方向前方≤0.3ATR就有阻挡(前高/前低/整数位)，且信号不强 →
       //   追该方向=买在墙下/卖在地板上，几乎无空间，极易被拒回落 → 观望。
@@ -2787,9 +2828,9 @@
 
     const agentViews = {
       historian_focus: '优先比较 相位(layered_score.phase.phase) 与 执行周期合力方向是否相同——力竭/回踩进行中/反转确认/推进相位不同则历史不可比；再比 scores(S/M/V)、量能regime、动能背离、与关键位距离',
-      analyst_focus: '判断顺序：①先读 phase。suppress=true(力竭 或 回踩进行中)→观望，不可在回踩途中顺势接刀；phase=reversal_confirmed→顺 tradeDir 方向(可反手做空/做多)；phase=retrace_end→顺 tradeDir 强顺势(短周期可入)；phase=impulse→顺势但回撤后入场勿追顶。②方向以 phase.tradeDir 为准(不是高周期背景 bgDir)；tradeDir=null 时观望。③再用 scores 和 feature_pool 确认置信度。',
-      critic_focus: '核查：①回踩进行中是否被误判为可顺势？②反转确认(reversal_confirmed)的结构破位/放量证据是否成立(有迹可循，非乱反手)？③力竭衰竭证据(背离/缩量/斜率走平≥2项)是否齐？④tradeDir 与执行周期 S/M/V 合力是否一致？',
-      judge_focus: '相位第一权重：phase.suppress=true(力竭/回踩进行中)一律观望；方向必须用 phase.tradeDir(可能与高周期相反=反转单)，严禁因"高周期还在涨"就否决执行周期已确认的反转；retrace_end/impulse 顺 tradeDir 放行。'
+      analyst_focus: '判断顺序：①先读 phase。suppress=true(力竭/回踩进行中/late_chase趋势已伸展无回撤结束确认/counter_knife逆强背景反手无确认)→倾向观望：late_chase别追最后一棒、等回撤结束(反向拒绝针/反包/动能转回)再顺势入；counter_knife别接飞刀、等破位或放量再反手；phase=reversal_confirmed→顺 tradeDir 方向(可反手做空/做多)；phase=retrace_end→顺 tradeDir 强顺势(短周期可入)；phase=impulse→顺势但回撤后入场勿追顶。②方向以 phase.tradeDir 为准(不是高周期背景 bgDir)；tradeDir=null 时观望。③再用 scores 和 feature_pool 确认置信度。相位仅供参考，你若看到明确机会(如已出现回撤结束确认)可独立推翻观望。',
+      critic_focus: '核查：①回踩进行中是否被误判为可顺势？②反转确认(reversal_confirmed)的结构破位/放量证据是否成立(有迹可循，非乱反手)？③力竭衰竭证据(背离/缩量/斜率走平)是否齐？④tradeDir 与执行周期 S/M/V 合力是否一致？⑤phase=late_chase/counter_knife(引擎建议观望)时分析师却要入场→核查其是否给出"回撤结束确认/破位放量确认"的具体证据，没有则支持观望(勿接最后一棒/勿接飞刀)。',
+      judge_focus: '相位第一权重(参考)：phase.suppress=true(力竭/回踩进行中/late_chase/counter_knife)倾向观望——late_chase=趋势已伸展无回撤结束确认(别追最后一棒)，counter_knife=逆强背景反手无破位/放量(别接飞刀)；方向必须用 phase.tradeDir(可能与高周期相反=反转单)，严禁因"高周期还在涨"就否决执行周期已确认的反转；retrace_end/impulse 顺 tradeDir 放行。相位会机械误判，与你和两位Agent的扎实证据冲突时以人(LLM)为准。'
     };
 
     return {

@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
   "name": "BTC Options Pro Analyzer v2",
-  "version": "3.15.0",
-  "description": "Binance 二元期权 4-Agent（v3.15: 观望也纳入复盘——观望单事后检验踏空率(本可盈利却观望)，单独统计不混入方向胜率，喂给裁判/元裁判推动减少无效观望；LLM主导+五本书心法+协作纠错）",
+  "version": "3.16.0",
+  "description": "Binance 二元期权 4-Agent（v3.16: 修复趋势市晚入场/追涨杀跌——成熟趋势已伸展却无回撤结束确认=观望(别追最后一棒)、逆强背景反手无破位放量=观望(别接飞刀)、放宽力竭/贴墙闸；LLM主导+五本书心法+协作纠错）",
   "permissions": [
     "activeTab",
     "storage",
