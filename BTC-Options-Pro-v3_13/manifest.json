@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
   "name": "BTC Options Pro Analyzer v2",
-  "version": "3.16.6",
-  "description": "Binance 二元期权 4-Agent（v3.16.6: 元裁判审计卡片加「应用建议」按钮一键写入对应Agent提示词; 修复autoPrompt自定义框在自动模式下被忽略(现注入分析师+裁判,临时指令生效); v3.16.5 历史学家样本可信度; LLM主导+五本书心法）",
+  "version": "3.16.7",
+  "description": "Binance 二元期权 4-Agent（v3.16.7: 新增『量价背离·回踩预警』纯信息标记——量能/动能未确认当前移动时标出并注入分析师/裁判(建议缩期限+降置信,不强制、不锁死LLM); v3.16.6 应用建议按钮+autoPrompt修复; LLM主导+五本书心法）",
   "permissions": [
     "activeTab",
     "storage",

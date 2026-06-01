@@ -225,11 +225,16 @@ function buildRoleSpecificViews(klineText) {
   }).join('\n');
   const bestLine = best ? summarizeBinaryCandidate(best) : '无';
   const compactSummary = '【结构化期限候选】\n' + candidateLines + '\n\n【最佳候选】\n  - ' + bestLine;
+  // v3.16.7 量价背离·回踩预警（纯信息，不改方向/可否/期限，只供 LLM 参考；注入 Agent 实际读到的文本）
+  const _phW = payload.layered_score && payload.layered_score.phase;
+  const pullbackWarnLine = (_phW && _phW.pullbackWarn)
+    ? '\n\n【⚠️ 量价背离·回踩预警】' + _phW.pullbackWarn + '——量能/动能未确认当前这波移动，回踩或反弹概率升高。建议：倾向缩短到期(5/10M)、适度降低置信度，勿用长期限去接回踩；不强制，方向与期限仍由你独立判断。'
+    : '';
   return {
     payload,
     rawText,
     historianText: rawText + '\n\n【结构化市场签名】\n' + tfLines + '\n\n【期限候选摘要】\n' + candidateLines,
-    analystText: compactSummary + '\n\n【多周期特征池】\n' + tfLines,
+    analystText: compactSummary + '\n\n【多周期特征池】\n' + tfLines + pullbackWarnLine,
     // v3.6 Bug4修复：给质疑师补充 tfLines（多周期特征池）
     // 原实现只给 rawText，但要求质疑师检查 dist 字段和多周期指标对比——这两类数据都不在 rawText 里。
     // 修复：加入 tfLines（含各周期RSI/MACD/ADX/volRatio/flags）和完整 dist 字段描述。
@@ -248,8 +253,8 @@ function buildRoleSpecificViews(klineText) {
       '  - 检查关键位距离（见上方dist字段）：ema21_atr/vwap_atr/prevHigh_atr/prevLow_atr/roundLevel_atr，≤0.3视为临近\n' +
       '  - 检查 1m/5m 的 StochRSI、RSI、MACD柱是否存在极值或多周期背离（见上方多周期特征池）\n' +
       '  - 检查 volRatio 量能是否支撑方向\n' +
-      '  - 注意：规则算法不提供方向建议，方向由分析师判断，你的任务是提出质疑和呈现事实\n\n【原始行情与指标】\n' + rawText,
-    judgeText: compactSummary + '\n\n【多周期特征池】\n' + tfLines + '\n\n【原始行情与指标】\n' + rawText
+      '  - 注意：规则算法不提供方向建议，方向由分析师判断，你的任务是提出质疑和呈现事实\n\n【原始行情与指标】\n' + rawText + pullbackWarnLine,
+    judgeText: compactSummary + '\n\n【多周期特征池】\n' + tfLines + '\n\n【原始行情与指标】\n' + rawText + pullbackWarnLine
   };
 }
 
@@ -2232,6 +2237,7 @@ async function handleAutoAnalyze(msg, senderTabId) {
           ' 方向=' + (_dphase.tradeDir || '观望') +
           ' op=' + _s.op + '(S' + _s.S + '/M' + _s.M + '/V' + _s.V + ')' +
           ' 背景bg=' + _s.bg +
+          (_dphase.pullbackWarn ? ' 回踩预警=' + _dphase.pullbackWarn : '') +
           ' 期限=' + (_dphase.suggestExpiry || '-') + 'M' +
           (_dphase.expiryWhy ? '(' + _dphase.expiryWhy + ')' : '');
       }

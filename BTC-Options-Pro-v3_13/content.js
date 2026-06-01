@@ -2529,6 +2529,20 @@
     const headwind = !bgNeutral && ((bgUp && opDir === 'bearish') || (!bgUp && opDir === 'bullish'));
     const upMove = opDir === 'bullish';
 
+    // v3.16.7 量价背离·回踩预警（纯信息：不改方向/可否/期限，只标出供 LLM 参考）
+    //   ① 量能与方向反号(V与op反号=量能未确认这波移动，如下跌缩量/上涨缩量) ② 动能顶/底背离
+    (function() {
+      const opSign = opScore > 0 ? 1 : opScore < 0 ? -1 : 0;
+      const vSign = V > 0 ? 1 : V < 0 ? -1 : 0;
+      const volDiverge = opSign !== 0 && vSign !== 0 && vSign !== opSign;
+      const momDiv = (opSign < 0 && (ex.momDivergence === 'bull' || tr.momDivergence === 'bull')) ||
+                     (opSign > 0 && (ex.momDivergence === 'bear' || tr.momDivergence === 'bear'));
+      const bits = [];
+      if (volDiverge) bits.push(upMove ? '上涨量不跟(需求不足)' : '下跌量不跟(抛压减弱)');
+      if (momDiv) bits.push(upMove ? '顶背离' : '底背离');
+      res.pullbackWarn = bits.length ? bits.join('+') : null;
+    })();
+
     // 力竭料（仅在合力很强且已伸展到极值时短暂观望，防接最后一棒；剥头皮门槛放宽）
     const dEma = ex.dist && isFinite(ex.dist.ema21_atr) ? ex.dist.ema21_atr : null;
     const stretch = dEma != null && (upMove ? dEma >= 2.0 : dEma <= -2.0);
