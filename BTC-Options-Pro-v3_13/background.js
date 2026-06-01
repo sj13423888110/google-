@@ -1883,10 +1883,9 @@ async function handleAutoAnalyze(msg, senderTabId) {
     const biasAnalyst = storedSessions.biasMemoryAnalyst || storedSessions.biasMemory || null;
     const biasJudge   = storedSessions.biasMemoryJudge   || storedSessions.biasMemory || null;
 
-    // v3.1 元裁判结论注入（Layer 1）：把上次审计的行动建议注入给分析师和裁判
-    // 注入维度5（提示词优化建议）和维度6（行动建议），去掉 PROMPT_SUGGESTIONS 机读块，避免污染
-    // Fix P0: 原代码错误提取了维度4(亏损共性)和维度5，标签也对不上；
-    //         同时 _dim5 用 $ 锚点会把维度6内容一起吞入，现改为正确的前瞻截断
+    // v3.1 元裁判结论注入（Layer 1）：把上次审计的系统级建议注入给分析师和裁判
+    // v3.16.2 注入维度5（提示词建议）/维度6（观望质量·踏空）/维度7（行动建议），去掉机读块避免污染
+    // Fix P0: 原代码错误提取了维度4(亏损共性)和维度5，标签也对不上；改为按维度号前瞻截断
     const _mjReport = storedSessions.metaJudgeReport || null;
     let metaJudgeSection = '';
     if (_mjReport && _mjReport.content) {
@@ -1895,12 +1894,14 @@ async function handleAutoAnalyze(msg, senderTabId) {
         .replace(/PROMPT_SUGGESTIONS_START[\s\S]*?PROMPT_SUGGESTIONS_END/g, '')
         .replace(/THRESHOLD_SUGGESTIONS_START[\s\S]*?THRESHOLD_SUGGESTIONS_END/g, '')
         .trim();
-      // 维度5=提示词优化建议，维度6=行动建议；用前瞻截断防止跨维度溢出
+      // v3.16.2 维度重排：维度5=提示词建议、维度6=观望质量/踏空、维度7=行动建议；前瞻截断防跨维度溢出
       const _dim5 = _mjClean.match(/【维度5[^】]*】([\s\S]*?)(?=【维度6|PROMPT_SUGGESTIONS_START|$)/);
-      const _dim6 = _mjClean.match(/【维度6[^】]*】([\s\S]*?)(?=【维度[7-9]|PROMPT_SUGGESTIONS_START|$)/);
+      const _dim6 = _mjClean.match(/【维度6[^】]*】([\s\S]*?)(?=【维度7|PROMPT_SUGGESTIONS_START|$)/);
+      const _dim7 = _mjClean.match(/【维度7[^】]*】([\s\S]*?)(?=【维度[89]|PROMPT_SUGGESTIONS_START|$)/);
       const _mjSnip = [
         _dim5 ? '【元裁判·提示词建议】' + _dim5[1].trim() : '',
-        _dim6 ? '【元裁判·行动建议】'   + _dim6[1].trim() : ''
+        _dim6 ? '【元裁判·观望质量】'   + _dim6[1].trim() : '',
+        _dim7 ? '【元裁判·行动建议】'   + _dim7[1].trim() : ''
       ].filter(Boolean).join('\n');
       if (_mjSnip) {
         metaJudgeSection = '\n\n【元裁判上次审计（' + _mjReport.createdAt + '，基于' + _mjReport.basedOn + '条记录）】\n' +
@@ -3436,7 +3437,7 @@ function extractSummary(text) {
 
 // ── v3.12.4 元裁判：解析机读建议块（含阈值建议）──────────────────
 // 从 LLM 输出里提取 PROMPT_SUGGESTIONS_START...END 和 THRESHOLD_SUGGESTIONS_START...END
-// 返回 { analyst, critic, judge, suppressAction, confidenceGate, trendCondition }
+// 返回 { analyst, critic, judge, suppressAction, confidenceGate, trendCondition, watchAction }
 function parseMetaJudgeSuggestions(text) {
   if (!text) return { analyst: null, critic: null, judge: null };
   const m = text.match(/PROMPT_SUGGESTIONS_START([\s\S]*?)PROMPT_SUGGESTIONS_END/);
@@ -3461,7 +3462,8 @@ function parseMetaJudgeSuggestions(text) {
     judge:            _extract('JUDGE'),
     suppressAction:   _tExtract('SUPPRESS_ACTION'),
     confidenceGate:   _tExtract('CONFIDENCE_GATE'),
-    trendCondition:   _tExtract('TREND_ENTRY_CONDITION')
+    trendCondition:   _tExtract('TREND_ENTRY_CONDITION'),
+    watchAction:      _tExtract('WATCH_ACTION')
   };
 }
 
@@ -3809,14 +3811,15 @@ async function handleMetaJudge(tabId) {
       '分析师：' + analystPromptSnip + '…\n' +
       '质疑师：' + criticPromptSnip + '…\n' +
       '裁判：'   + judgePromptSnip  + '…\n\n' +
-      '[审计任务] 基于事后真实走势，按以下6个维度输出审计报告，每项不超过3句话，总字数≤500字：\n' +
+      '[审计任务] 基于事后真实走势，按以下7个维度输出审计报告，每项不超过3句话，总字数≤560字：\n' +
       '【维度1：方向判断准确率分析】哪类结构（phase/marketState/ADX范围）下方向✗最集中？列出最差的2个组合及错误率。\n' +
       '【维度2：suppress 误杀评估】suppress=true 时系统强制观望，事后走势显示有多少比例是顺势行情被误杀？应调整为软压制还是保持硬否决？\n' +
       '【维度3：分析师vs裁判背离价值】背离时谁更准？质疑师对最终方向的影响是正向还是负向？\n' +
       '【维度4：亏损 session 共性特征】连续亏损的 session 在 phase/trendBias/ADX 上有何共性？这类场景应直接观望。\n' +
       '【维度5：提示词优化建议】基于实际走势数据，三段提示词各有哪一处最需要调整？\n' +
-      '【维度6：下一步行动建议】最高优先级的1-2条具体可执行改进建议（必须含量化目标和修改位置）。\n\n' +
-      '[输出格式] 先严格按6个【维度X】标题输出，然后追加以下两个机读块（必须完整输出）：\n\n' +
+      '【维度6：观望质量与踏空】必答。结合上方"观望踏空率"数据：观望是否过度(踏空率≥50%=门槛太保守、错过太多有效行情)还是过松(踏空率≤20%且观望少)？踏空集中在看涨还是看跌方向？给出"应升高/降低/维持观望倾向"的明确结论；若无观望样本(<5条)则写"观望样本不足，暂不评价"。\n' +
+      '【维度7：下一步行动建议】最高优先级的1-2条具体可执行改进建议（必须含量化目标和修改位置）。\n\n' +
+      '[输出格式] 先严格按7个【维度X】标题输出，然后追加以下两个机读块（必须完整输出）：\n\n' +
       'PROMPT_SUGGESTIONS_START\n' +
       'ANALYST: （分析师提示词末尾追加的一句话，≤40字；若无需修改填"无"）\n' +
       'CRITIC: （质疑师提示词末尾追加的一句话，≤40字；若无需修改填"无"）\n' +
@@ -3826,6 +3829,7 @@ async function handleMetaJudge(tabId) {
       'SUPPRESS_ACTION: （三选一：soft_cap_58=改为下调置信度上限至58% / hard_block=保持完全拒绝 / keep=维持现状）\n' +
       'CONFIDENCE_GATE: （建议将 applyDecisionProfileGate 门槛改为多少%，当前为58，填数字）\n' +
       'TREND_ENTRY_CONDITION: （一条可补充进分析师提示词的趋势入场条件，≤30字；若无填"无"）\n' +
+      'WATCH_ACTION: （基于踏空率三选一：reduce_watch=踏空率高应降低观望倾向、有依据就给方向 / increase_watch=观望太松应更谨慎 / keep=维持现状；观望样本不足填keep）\n' +
       'THRESHOLD_SUGGESTIONS_END';
 
     notifyMetaJudgeTabs(tabId, { type: 'META_JUDGE_PROGRESS', step: '元裁判审计中（约30-60秒）…' });
