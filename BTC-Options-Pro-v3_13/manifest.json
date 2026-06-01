@@ -1,0 +1,66 @@
+{
+  "manifest_version": 3,
+  "name": "BTC Options Pro Analyzer v2",
+  "version": "3.16.7",
+  "description": "Binance 二元期权 4-Agent（v3.16.7: 新增『量价背离·回踩预警』纯信息标记——量能/动能未确认当前移动时标出并注入分析师/裁判(建议缩期限+降置信,不强制、不锁死LLM); v3.16.6 应用建议按钮+autoPrompt修复; LLM主导+五本书心法）",
+  "permissions": [
+    "activeTab",
+    "storage",
+    "tabs",
+    "notifications",
+    "alarms",
+    "downloads"
+  ],
+  "host_permissions": [
+    "https://api.binance.com/*",
+    "https://stream.binance.com/*",
+    "https://api.anthropic.com/*",
+    "https://api.apikey.fun/*",
+    "https://www.binance.com/*"
+  ],
+  "content_scripts": [
+    {
+      "matches": [
+        "https://www.binance.com/*"
+      ],
+      "js": [
+        "winrate-calc.js",
+        "storage-keys.js",
+        "content.js"
+      ],
+      "css": [
+        "content.css"
+      ],
+      "run_at": "document_idle",
+      "all_frames": false
+    }
+  ],
+  "web_accessible_resources": [
+    {
+      "resources": [
+        "icon*.png"
+      ],
+      "matches": [
+        "https://www.binance.com/*"
+      ]
+    }
+  ],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "icons": {
+    "16": "icon16.png",
+    "32": "icon32.png",
+    "48": "icon48.png",
+    "128": "icon128.png"
+  },
+  "action": {
+    "default_popup": "popup.html",
+    "default_icon": {
+      "16": "icon16.png",
+      "32": "icon32.png",
+      "48": "icon48.png",
+      "128": "icon128.png"
+    }
+  }
+}
