@@ -2071,7 +2071,12 @@ async function handleAutoAnalyze(msg, senderTabId) {
       '规则算法只提供客观分数，不提供方向建议。你必须从原始指标和特征数据独立形成方向判断。\n' +
       '输出必须包含：首选方案（期限+方向+置信度）、最强做多证据、最强做空证据、主要风险、放弃的备选期限。\n' +
       '质疑师和裁判会基于你的输出做风险审查，请给出能被复核的高密度摘要。';
-    const analystFullText = analystSysPrompt + analystBg + historianSection + analystHistorySection + analystKlineSection + analystDataSection + analystDecisionGuide + PROMPT_TAIL_REMINDER;
+    // v3.16.6 恢复 autoPrompt 槽位在自动模式下生效：把面板"自定义提示词框"(msg.prompt)作为
+    //   临时补充指令注入分析师(本次优先遵循)。此前自动流程未拼接它，导致临时指令被忽略。
+    const analystExtra = msg.prompt
+      ? '\n\n【临时补充指令（用户面板自定义·本次优先遵循）】\n' + msg.prompt + '\n'
+      : '';
+    const analystFullText = analystSysPrompt + analystBg + analystExtra + historianSection + analystHistorySection + analystKlineSection + analystDataSection + analystDecisionGuide + PROMPT_TAIL_REMINDER;
 
     // 启动分析师
     const _tA = Date.now();
@@ -2150,7 +2155,7 @@ async function handleAutoAnalyze(msg, senderTabId) {
     // 若分析师/质疑师遗漏关键信息，裁判无从发现。现补入多周期特征池和关键位距离供独立核查。
     const judgeMarketData = roleViews.judgeText
       ? '\n\n【市场数据（独立核查用）】\n' + roleViews.judgeText : '';
-    const judgeFullText = judgePrompt + '\n\n' + judgeContextText +
+    const judgeFullText = judgePrompt + '\n\n' + judgeContextText + analystExtra +
       judgeMarketData +
       '\n\n【分析师判断】\n' + analystResult +
       '\n\n【质疑师审查结论】\n' + criticResult + judgeDecisionGuide + PROMPT_TAIL_REMINDER;

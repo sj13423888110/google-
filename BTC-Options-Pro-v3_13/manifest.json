@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
   "name": "BTC Options Pro Analyzer v2",
-  "version": "3.16.5",
-  "description": "Binance 二元期权 4-Agent（v3.16.5: 修复历史学家总喊'样本不足'——同类样本6-9条标'中等可信'照报胜率(只有<6才叫样本不足),与代码三档可信度对齐,自动迁移; v3.16.4 强ADX追极值观望+质疑师强制反驳; LLM主导+五本书心法）",
+  "version": "3.16.6",
+  "description": "Binance 二元期权 4-Agent（v3.16.6: 元裁判审计卡片加「应用建议」按钮一键写入对应Agent提示词; 修复autoPrompt自定义框在自动模式下被忽略(现注入分析师+裁判,临时指令生效); v3.16.5 历史学家样本可信度; LLM主导+五本书心法）",
   "permissions": [
     "activeTab",
     "storage",

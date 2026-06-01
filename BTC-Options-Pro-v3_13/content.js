@@ -4797,8 +4797,36 @@
     }
   });
 
-  // v3.16.3 元裁判审计卡片（内联进「历史」列表，替代弹窗；样式贴近会话卡片，可折叠/复制）
+  // v3.16.6 解析元裁判报告里的 PROMPT_SUGGESTIONS 块 → {analyst,critic,judge}
+  function _parsePromptSuggestions(content) {
+    const m = (content || '').match(/PROMPT_SUGGESTIONS_START([\s\S]*?)PROMPT_SUGGESTIONS_END/);
+    if (!m) return null;
+    const blk = m[1];
+    function ext(key) {
+      const r = blk.match(new RegExp(key + '\\s*[:：]\\s*([^\\n]+)'));
+      if (!r) return null;
+      const v = r[1].trim();
+      return (v === '无' || v === '—' || v === '') ? null : v;
+    }
+    return { analyst: ext('ANALYST'), critic: ext('CRITIC'), judge: ext('JUDGE') };
+  }
+  function _miniToast(text) {
+    try {
+      const t = document.createElement('div');
+      t.textContent = text;
+      t.style.cssText = 'position:fixed;left:50%;top:14%;transform:translateX(-50%);z-index:2147483647;'
+        + 'background:#1e2336;border:1px solid #4fc3f7;color:#e5e7eb;font-size:12px;padding:8px 14px;'
+        + 'border-radius:8px;box-shadow:0 6px 24px rgba(0,0,0,.5);max-width:80vw;text-align:center';
+      document.body.appendChild(t);
+      setTimeout(function() { t.remove(); }, 3600);
+    } catch (_) {}
+  }
+  const _ROLE_ZH = { analyst: '分析师', critic: '质疑师', judge: '裁判' };
+
+  // v3.16.3 元裁判审计卡片（内联进「历史」列表，替代弹窗；可折叠/复制/一键应用提示词建议）
   function _makeMetaJudgeItem(report) {
+    const _sug = _parsePromptSuggestions(report.content);
+    const _hasSug = !!(_sug && (_sug.analyst || _sug.critic || _sug.judge));
     const item = document.createElement('div');
     item.className = 'tvc-meta-history-item';
     item.style.cssText = 'border:1px solid #2a3350;border-left:3px solid #4fc3f7;border-radius:8px;'
@@ -4808,8 +4836,9 @@
     head.innerHTML = '<span style="color:#6b7280">' + (report.createdAt || '') + '</span>'
       + '<span style="color:#93c5fd;font-weight:600">📋 元裁判审计（基于'
       + (report.basedOn != null ? report.basedOn : '—') + '条记录）</span>'
-      + '<span class="tvc-meta-copy" title="复制报告" style="cursor:pointer;color:#6b7280;margin-left:auto">⧉</span>'
-      + '<span class="tvc-agent-collapse-arrow" style="margin-left:2px;transform:rotate(-90deg)">▾</span>';
+      + (_hasSug ? '<span class="tvc-meta-apply" title="把本次提示词建议写入对应Agent提示词(带标记、可在设置查看/删除)" style="cursor:pointer;color:#93c5fd;margin-left:auto;font-size:10px;border:1px solid #2a3350;border-radius:4px;padding:1px 5px">✍️ 应用建议</span>' : '')
+      + '<span class="tvc-meta-copy" title="复制报告" style="cursor:pointer;color:#6b7280;' + (_hasSug ? 'margin-left:6px' : 'margin-left:auto') + '">⧉</span>'
+      + '<span class="tvc-agent-collapse-arrow" style="margin-left:6px;transform:rotate(-90deg)">▾</span>';
     const body = document.createElement('div');
     body.style.cssText = 'display:none;font-size:11.5px;line-height:1.55;color:#cbd5e1;white-space:pre-wrap;'
       + 'word-break:break-word;user-select:text';
@@ -4821,6 +4850,26 @@
           e.target.textContent = '✓';
           setTimeout(function() { e.target.textContent = '⧉'; }, 1200);
         } catch (_) {}
+        return;
+      }
+      if (e.target && e.target.classList.contains('tvc-meta-apply')) {
+        e.stopPropagation();
+        if (!_hasSug) { _miniToast('本次审计无可应用的提示词建议'); return; }
+        const names = [];
+        if (_sug.analyst) names.push('分析师'); if (_sug.critic) names.push('质疑师'); if (_sug.judge) names.push('裁判');
+        const btn = e.target;
+        if (!confirm('将把元裁判建议写入【' + names.join('/') + '】提示词。\n（带【元裁判建议】标记、可在设置里查看或删除；再次应用会替换上次的建议。）\n确定？')) return;
+        btn.textContent = '⏳ 写入中…';
+        safeSendMessage({ type: 'APPLY_META_JUDGE_SUGGESTIONS', suggestions: _sug }, function(resp) {
+          if (resp && resp.ok) {
+            const zh = (resp.applied || []).map(function(r) { return _ROLE_ZH[r] || r; });
+            btn.textContent = '✓ 已写入';
+            _miniToast(zh.length ? ('已写入 ' + zh.join('/') + ' 提示词（下次分析生效；设置里可查看/删除）') : '本次无可写入的建议');
+          } else {
+            btn.textContent = '✍️ 应用建议';
+            _miniToast('应用失败' + (resp && resp.error ? '：' + resp.error : '（请重试）'));
+          }
+        });
         return;
       }
       const collapsed = body.style.display === 'none';
