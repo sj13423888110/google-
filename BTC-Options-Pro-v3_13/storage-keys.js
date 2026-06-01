@@ -20,7 +20,7 @@
     'biasMemory',
     'biasMemoryAnalyst', 'biasMemoryJudge', 'biasCompressedAt',
     'agentMaxTokens', 'promptDefaultsVersion',
-    'metaJudgeReport', 'metaJudgeRunning', 'metaJudgeModelIdx'
+    'metaJudgeReport', 'metaJudgeRunning', 'metaJudgeModelIdx', 'metaJudgeReports'
   ]);
 
   const KNOWN_PREFIXES = ['abExperiment_', 'abStats_'];

@@ -3649,124 +3649,49 @@
     if (agFixed) agFixed.style.display = 'none';
   }
 
-  // v3.16 元裁判报告查看器（修复：报告已生成存进 metaJudgeReport，但徽章点击只会重新触发、
-  //   且无任何 META_JUDGE_* 监听，导致"显示已更新却无处查看"）。
-  //   现在：点击徽章→弹窗展示 report.content；弹窗内可「🔄 重新审计」；并实时响应进度/完成/错误。
+  // v3.16.3 元裁判：审计结果不再弹窗，改为内联展示在「历史」标签(自动子标签)的列表里(像旧版)。
+  //   徽章 = 手动触发审计 + 显示进度；完成后若正在看历史页则自动刷新出新的审计卡片。
   (function _bindMetaJudge() {
-    var _modal = null, _bodyEl = null, _metaEl = null, _titleEl = null;
-
-    function _ensureModal() {
-      if (_modal) return _modal;
-      _modal = document.createElement('div');
-      _modal.id = 'tvc-meta-judge-modal';
-      _modal.style.cssText = 'position:fixed;inset:0;z-index:2147483647;display:none;'
-        + 'background:rgba(0,0,0,0.55);align-items:center;justify-content:center;'
-        + 'font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif';
-      var card = document.createElement('div');
-      card.style.cssText = 'width:min(620px,92vw);max-height:80vh;display:flex;flex-direction:column;'
-        + 'background:#1a1d29;border:1px solid #2a3350;border-radius:10px;'
-        + 'box-shadow:0 12px 40px rgba(0,0,0,.6);overflow:hidden';
-      var head = document.createElement('div');
-      head.style.cssText = 'display:flex;align-items:center;gap:8px;padding:10px 12px;'
-        + 'border-bottom:1px solid #2a3350;background:#1e2336';
-      _titleEl = document.createElement('div');
-      _titleEl.style.cssText = 'font-size:13px;font-weight:600;color:#93c5fd;flex:1';
-      _titleEl.textContent = '📋 元裁判审计报告';
-      var rerun = document.createElement('button');
-      rerun.textContent = '🔄 重新审计';
-      rerun.style.cssText = 'font-size:11px;color:#cbd5e1;background:#2a3350;border:none;'
-        + 'border-radius:5px;padding:4px 8px;cursor:pointer';
-      rerun.addEventListener('click', _triggerAudit);
-      var closeBtn = document.createElement('button');
-      closeBtn.textContent = '✕';
-      closeBtn.style.cssText = 'font-size:13px;color:#cbd5e1;background:transparent;border:none;'
-        + 'cursor:pointer;padding:2px 6px';
-      closeBtn.addEventListener('click', _close);
-      head.appendChild(_titleEl); head.appendChild(rerun); head.appendChild(closeBtn);
-      _metaEl = document.createElement('div');
-      _metaEl.style.cssText = 'font-size:10px;color:#6b7280;padding:6px 12px 0';
-      _bodyEl = document.createElement('div');
-      _bodyEl.style.cssText = 'padding:10px 12px 14px;overflow-y:auto;white-space:pre-wrap;'
-        + 'word-break:break-word;font-size:12px;line-height:1.55;color:#d1d5db;user-select:text;flex:1';
-      card.appendChild(head); card.appendChild(_metaEl); card.appendChild(_bodyEl);
-      _modal.appendChild(card);
-      _modal.addEventListener('click', function(e) { if (e.target === _modal) _close(); });
-      document.body.appendChild(_modal);
-      return _modal;
-    }
-    function _close() { if (_modal) _modal.style.display = 'none'; }
-    function _isOpen() { return _modal && _modal.style.display !== 'none'; }
-
-    function _renderReport(report) {
-      _ensureModal();
-      if (report && report.content) {
-        _metaEl.textContent = '生成时间：' + (report.createdAt || '—')
-          + '　|　基于已验证记录：' + (report.basedOn != null ? report.basedOn : '—') + ' 条';
-        _bodyEl.textContent = report.content;
-      } else {
-        _metaEl.textContent = '';
-        _bodyEl.textContent = '暂无审计报告。点击右上角「🔄 重新审计」生成（需≥10条已验证记录）。';
-      }
-    }
-    function _setBusy(txt) {
-      _ensureModal();
-      _metaEl.textContent = '';
-      _bodyEl.textContent = txt || '元裁判审计中…（约30-60秒，请稍候）';
-    }
-    function _triggerAudit() {
-      safeSendMessage({ type: 'TRIGGER_META_JUDGE' });
-      _setBusy('元裁判审计启动中…（约30-60秒）');
+    function _setBadge(txt) {
       var b = document.getElementById('tvc-meta-judge-badge');
-      if (b) { b.style.display = 'inline-block'; b.textContent = '⏳ 元裁判审计中…'; }
+      if (b) { b.style.display = 'inline-block'; b.textContent = txt; }
     }
-    function _openModal() {
-      _ensureModal();
-      _modal.style.display = 'flex';
-      safeStorageGet('metaJudgeReport').then(function(d) {
-        var r = d && d.metaJudgeReport;
-        if (r && r.content) _renderReport(r);
-        else _triggerAudit();   // 没有现成报告→直接跑一次并显示进度
-      }).catch(function() { _renderReport(null); });
-    }
-    function _badgeText(report) {
-      var b = document.getElementById('tvc-meta-judge-badge');
-      if (!b) return;
-      b.style.display = 'inline-block';
-      b.textContent = report && report.createdAt
-        ? ('📋 元裁判报告（' + report.createdAt + '）') : '📋 元裁判报告';
-    }
-
     function _tryBind() {
       var _badge = document.getElementById('tvc-meta-judge-badge');
       if (!_badge) { setTimeout(_tryBind, 1000); return; }
       if (!_badge._mjBound) {
         _badge._mjBound = true;
-        _badge.title = '点击查看元裁判审计报告（弹窗内可重新审计）';
-        _badge.addEventListener('click', _openModal);
+        _badge.title = '点击手动触发元裁判审计（结果显示在「历史」标签·自动子标签）';
+        _badge.addEventListener('click', function() {
+          safeSendMessage({ type: 'TRIGGER_META_JUDGE' });
+          _setBadge('⏳ 元裁判审计中…（完成后见「历史」标签）');
+        });
       }
       safeStorageGet('metaJudgeReport').then(function(d) {
-        if (d && d.metaJudgeReport && d.metaJudgeReport.content) _badgeText(d.metaJudgeReport);
+        if (d && d.metaJudgeReport && d.metaJudgeReport.content) {
+          _setBadge('📋 元裁判报告（' + (d.metaJudgeReport.createdAt || '') + '）见历史');
+        }
       });
     }
     setTimeout(_tryBind, 800);
 
-    // 元裁判进度/完成/错误监听（原先完全缺失 → 这是"已更新却看不到结果"的直接原因）
+    function _refreshHistoryIfVisible() {
+      try {
+        var hv = document.getElementById('tvc-history-view');
+        if (hv && hv.style.display !== 'none' && typeof renderHistory === 'function') renderHistory();
+      } catch (_) {}
+    }
+
+    // 元裁判进度/完成/错误监听：只更新徽章状态；完成后把报告渲染进「历史」列表
     chrome.runtime.onMessage.addListener(function(msg) {
       if (!msg || !msg.type) return;
-      var b = document.getElementById('tvc-meta-judge-badge');
-      if (msg.type === 'META_JUDGE_START') {
-        if (b) { b.style.display = 'inline-block'; b.textContent = '⏳ 元裁判审计中…'; }
-        if (_isOpen()) _setBusy('元裁判审计中…（约30-60秒）');
-      } else if (msg.type === 'META_JUDGE_PROGRESS') {
-        if (b) { b.style.display = 'inline-block'; b.textContent = '⏳ ' + (msg.step || '审计中…'); }
-        if (_isOpen()) _setBusy(msg.step || '元裁判审计中…');
-      } else if (msg.type === 'META_JUDGE_DONE') {
-        _badgeText(msg.report);
-        if (_isOpen()) _renderReport(msg.report);   // 弹窗开着→实时刷新；关着→只更新徽章不打扰
-      } else if (msg.type === 'META_JUDGE_ERROR') {
-        if (b) { b.style.display = 'inline-block'; b.textContent = '⚠️ 元裁判：' + (msg.error || '失败'); }
-        if (_isOpen()) _setBusy('元裁判失败：' + (msg.error || '未知错误') + '\n\n可点「🔄 重新审计」重试。');
+      if (msg.type === 'META_JUDGE_START') _setBadge('⏳ 元裁判审计中…（完成后见「历史」标签）');
+      else if (msg.type === 'META_JUDGE_PROGRESS') _setBadge('⏳ ' + (msg.step || '审计中…'));
+      else if (msg.type === 'META_JUDGE_DONE') {
+        _setBadge('📋 审计完成（见「历史」标签·自动）✓');
+        _refreshHistoryIfVisible();
       }
+      else if (msg.type === 'META_JUDGE_ERROR') _setBadge('⚠️ 元裁判：' + (msg.error || '失败'));
     });
   })();
 
@@ -4853,8 +4778,43 @@
     }
   });
 
+  // v3.16.3 元裁判审计卡片（内联进「历史」列表，替代弹窗；样式贴近会话卡片，可折叠/复制）
+  function _makeMetaJudgeItem(report) {
+    const item = document.createElement('div');
+    item.className = 'tvc-meta-history-item';
+    item.style.cssText = 'border:1px solid #2a3350;border-left:3px solid #4fc3f7;border-radius:8px;'
+      + 'background:#161b2b;padding:8px 10px';
+    const head = document.createElement('div');
+    head.style.cssText = 'display:flex;align-items:center;gap:6px;font-size:11px;margin-bottom:5px;cursor:pointer';
+    head.innerHTML = '<span style="color:#6b7280">' + (report.createdAt || '') + '</span>'
+      + '<span style="color:#93c5fd;font-weight:600">📋 元裁判审计（基于'
+      + (report.basedOn != null ? report.basedOn : '—') + '条记录）</span>'
+      + '<span class="tvc-meta-copy" title="复制报告" style="cursor:pointer;color:#6b7280;margin-left:auto">⧉</span>'
+      + '<span class="tvc-agent-collapse-arrow" style="margin-left:2px">▾</span>';
+    const body = document.createElement('div');
+    body.style.cssText = 'font-size:11.5px;line-height:1.55;color:#cbd5e1;white-space:pre-wrap;'
+      + 'word-break:break-word;user-select:text';
+    body.textContent = report.content || '';
+    head.addEventListener('click', function(e) {
+      if (e.target && e.target.classList.contains('tvc-meta-copy')) {
+        try {
+          navigator.clipboard.writeText(report.content || '');
+          e.target.textContent = '✓';
+          setTimeout(function() { e.target.textContent = '⧉'; }, 1200);
+        } catch (_) {}
+        return;
+      }
+      const collapsed = body.style.display === 'none';
+      body.style.display = collapsed ? 'block' : 'none';
+      const arr = head.querySelector('.tvc-agent-collapse-arrow');
+      if (arr) arr.style.transform = collapsed ? '' : 'rotate(-90deg)';
+    });
+    item.appendChild(head); item.appendChild(body);
+    return item;
+  }
+
   async function renderHistory() {
-    const data = await safeStorageGet(['sessions', 'autoSessions']);
+    const data = await safeStorageGet(['sessions', 'autoSessions', 'metaJudgeReports', 'metaJudgeReport']);
     const sessions = data.sessions || [];
     const autoSessions = data.autoSessions || [];
     const list = document.getElementById('tvc-history-list');
@@ -4891,11 +4851,19 @@
       const filtered = historyDir === 'all'
         ? autoSessions
         : autoSessions.filter(s => s.direction === historyDir);
-      if (!filtered.length) {
+      // v3.16.3 元裁判审计报告内联到历史列表，按时间与会话交错；方向过滤(看涨/看跌/观望)时不混入审计
+      let metaReports = data.metaJudgeReports || [];
+      if (!metaReports.length && data.metaJudgeReport && data.metaJudgeReport.content) metaReports = [data.metaJudgeReport];
+      if (historyDir !== 'all') metaReports = [];
+      if (!filtered.length && !metaReports.length) {
         list.innerHTML = '<div class="tvc-empty">暂无记录</div>'; return;
       }
+      const _items = [];
+      filtered.forEach(s => _items.push({ ts: s.dataTimestamp || 0, build: () => _makeHistoryItem(s, true, sessions, autoSessions) }));
+      metaReports.forEach(r => _items.push({ ts: r.ts || Date.now(), build: () => _makeMetaJudgeItem(r) }));
+      _items.sort((a, b) => b.ts - a.ts);
       const frag = document.createDocumentFragment();
-      filtered.forEach(s => frag.appendChild(_makeHistoryItem(s, true, sessions, autoSessions)));
+      _items.forEach(it => frag.appendChild(it.build()));
       list.innerHTML = '';
       list.appendChild(frag);
       // 恢复展开状态 + 输入框内容 + tab选中 + 滚动位置

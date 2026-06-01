@@ -3848,12 +3848,16 @@ async function handleMetaJudge(tabId) {
     const report = {
       content: result,
       createdAt: new Date().toLocaleString('zh-CN'),
+      ts: Date.now(),               // v3.16.3 数字时间戳：供"历史"列表按时间与会话交错排序
       verifiedAt: autoSessions.filter(function(s) {
         return s.verifyResult === 'win' || s.verifyResult === 'loss';
       }).length,
       basedOn: verified.length
     };
-    await chrome.storage.local.set({ metaJudgeReport: report });
+    // v3.16.3 保留审计历史（最新在前，最多30条），供「历史」标签内联展示，替代弹窗
+    const _mjPrev = (await chrome.storage.local.get('metaJudgeReports')).metaJudgeReports || [];
+    const _mjReports = [report].concat(_mjPrev).slice(0, 30);
+    await chrome.storage.local.set({ metaJudgeReport: report, metaJudgeReports: _mjReports });
     BgLog.info('[元裁判] 审计报告已生成', 'basedOn=' + verified.length);
     notifyMetaJudgeTabs(tabId, { type: 'META_JUDGE_DONE', report: report });
   } catch (e) {
