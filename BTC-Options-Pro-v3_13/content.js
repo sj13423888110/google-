@@ -2583,6 +2583,16 @@
     const flippedConfirm = sw.brokePrevLow || sw.brokePrevHigh || ex.volRegime === 'expanding';
     const counterKnife = headwind && !flippedConfirm && Math.abs(bgSign) >= 4 && Math.abs(opScore) < 3.5;
 
+    // ════ v3.16.4 修复P0(审计维度1/4)：强ADX追势撞动能极值闸 ════
+    //   强ADX(≥30)趋势里顺势追单，却把单子追进动能极值：看跌时已超卖(卖在地板)/看涨时已超买(买在墙上)，
+    //   且无回撤结束的新鲜反向确认 → 这就是审计里 impulse|ADX≥30 连败(0/6,追空进超卖反弹)的根因。观望。
+    //   有新鲜确认(破位/反包/动能转回)则照常入场，不误伤；只拦"撞极值+无确认"的接盘单。
+    const adxStrong = adxEx != null && adxEx >= 30;
+    const stochK = isFinite(ex.stochK) ? ex.stochK : null;
+    const intoOversold   = !upMove && ((stochK != null && stochK <= 20) || (isFinite(ex.rsi) && ex.rsi <= 35) || (bbP != null && bbP <= 0.1));
+    const intoOverbought =  upMove && ((stochK != null && stochK >= 80) || (isFinite(ex.rsi) && ex.rsi >= 65) || (bbP != null && bbP >= 0.9));
+    const chaseExtreme = adxStrong && (intoOversold || intoOverbought) && !freshPullbackEnd;
+
     if (opDir === 'neutral') {
       // 执行周期合力不足 → 真没方向，观望（剥头皮唯一的方向性观望）
       res.confirmed = false; res.phase = 'unclear';
@@ -2606,6 +2616,15 @@
                       '无回撤结束确认，追=接最后一棒',
                       '等回撤结束(反向拒绝针/反包/动能转回)再顺势入'];
       res.label = '趋势伸展无确认(观望，等回撤结束)';
+    } else if (chaseExtreme) {
+      // v3.16.4 修复P0：强ADX追势撞动能极值(看跌进超卖/看涨进超买)且无回撤结束确认 → 卖在地板/买在墙上，观望
+      res.confirmed = true; res.phase = 'chase_extreme'; res.suppress = true;
+      res.trendDir = opDir; res.tradeDir = null; res.trendSign = 0;
+      res.contBias = 0; res.suggestExpiry = null;
+      res.evidence = ['强ADX(' + (adxEx != null ? adxEx.toFixed(0) : '?') + ')追势但'
+                      + (upMove ? '已超买(买在墙上)' : '已超卖(卖在地板)'),
+                      '无回撤结束确认，追=接盘', '等回撤结束反向确认再顺势'];
+      res.label = (upMove ? '追多进超买' : '追空进超卖') + '(观望，勿接盘)';
     } else if (counterKnife) {
       // v3.16 修复②：逆强背景反手但无破位/放量确认 → 接飞刀，观望
       res.confirmed = true; res.phase = 'counter_knife'; res.suppress = true;
@@ -2828,7 +2847,7 @@
 
     const agentViews = {
       historian_focus: '优先比较 相位(layered_score.phase.phase) 与 执行周期合力方向是否相同——力竭/回踩进行中/反转确认/推进相位不同则历史不可比；再比 scores(S/M/V)、量能regime、动能背离、与关键位距离',
-      analyst_focus: '判断顺序：①先读 phase。suppress=true(力竭/回踩进行中/late_chase趋势已伸展无回撤结束确认/counter_knife逆强背景反手无确认)→倾向观望：late_chase别追最后一棒、等回撤结束(反向拒绝针/反包/动能转回)再顺势入；counter_knife别接飞刀、等破位或放量再反手；phase=reversal_confirmed→顺 tradeDir 方向(可反手做空/做多)；phase=retrace_end→顺 tradeDir 强顺势(短周期可入)；phase=impulse→顺势但回撤后入场勿追顶。②方向以 phase.tradeDir 为准(不是高周期背景 bgDir)；tradeDir=null 时观望。③再用 scores 和 feature_pool 确认置信度。相位仅供参考，你若看到明确机会(如已出现回撤结束确认)可独立推翻观望。',
+      analyst_focus: '判断顺序：①先读 phase。suppress=true(力竭/回踩进行中/late_chase趋势已伸展无回撤结束确认/counter_knife逆强背景反手无确认/chase_extreme强ADX追势撞超卖超买无确认)→倾向观望：late_chase别追最后一棒、chase_extreme别卖在地板/买在墙上、都等回撤结束(反向拒绝针/反包/动能转回)再顺势入；counter_knife别接飞刀、等破位或放量再反手；phase=reversal_confirmed→顺 tradeDir 方向(可反手做空/做多)；phase=retrace_end→顺 tradeDir 强顺势(短周期可入)；phase=impulse→顺势但回撤后入场勿追顶。②方向以 phase.tradeDir 为准(不是高周期背景 bgDir)；tradeDir=null 时观望。③再用 scores 和 feature_pool 确认置信度。相位仅供参考，你若看到明确机会(如已出现回撤结束确认)可独立推翻观望。',
       critic_focus: '核查：①回踩进行中是否被误判为可顺势？②反转确认(reversal_confirmed)的结构破位/放量证据是否成立(有迹可循，非乱反手)？③力竭衰竭证据(背离/缩量/斜率走平)是否齐？④tradeDir 与执行周期 S/M/V 合力是否一致？⑤phase=late_chase/counter_knife(引擎建议观望)时分析师却要入场→核查其是否给出"回撤结束确认/破位放量确认"的具体证据，没有则支持观望(勿接最后一棒/勿接飞刀)。',
       judge_focus: '相位第一权重(参考)：phase.suppress=true(力竭/回踩进行中/late_chase/counter_knife)倾向观望——late_chase=趋势已伸展无回撤结束确认(别追最后一棒)，counter_knife=逆强背景反手无破位/放量(别接飞刀)；方向必须用 phase.tradeDir(可能与高周期相反=反转单)，严禁因"高周期还在涨"就否决执行周期已确认的反转；retrace_end/impulse 顺 tradeDir 放行。相位会机械误判，与你和两位Agent的扎实证据冲突时以人(LLM)为准。'
     };
@@ -4790,9 +4809,9 @@
       + '<span style="color:#93c5fd;font-weight:600">📋 元裁判审计（基于'
       + (report.basedOn != null ? report.basedOn : '—') + '条记录）</span>'
       + '<span class="tvc-meta-copy" title="复制报告" style="cursor:pointer;color:#6b7280;margin-left:auto">⧉</span>'
-      + '<span class="tvc-agent-collapse-arrow" style="margin-left:2px">▾</span>';
+      + '<span class="tvc-agent-collapse-arrow" style="margin-left:2px;transform:rotate(-90deg)">▾</span>';
     const body = document.createElement('div');
-    body.style.cssText = 'font-size:11.5px;line-height:1.55;color:#cbd5e1;white-space:pre-wrap;'
+    body.style.cssText = 'display:none;font-size:11.5px;line-height:1.55;color:#cbd5e1;white-space:pre-wrap;'
       + 'word-break:break-word;user-select:text';
     body.textContent = report.content || '';
     head.addEventListener('click', function(e) {

@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
   "name": "BTC Options Pro Analyzer v2",
-  "version": "3.16.3",
-  "description": "Binance 二元期权 4-Agent（v3.16.3: 元裁判审计结果改为内联展示在「历史」标签(像旧版,不再弹窗),保留多条审计历史按时间与预测交错; v3.16.2 踏空审计维度; v3.16 修复趋势市晚入场/追涨杀跌; LLM主导+五本书心法+协作纠错）",
+  "version": "3.16.4",
+  "description": "Binance 二元期权 4-Agent（v3.16.4: P0据审计——强ADX(≥30)追势撞超卖/超买且无回撤结束确认=观望(勿卖地板/买墙上),质疑师强制给基于K线的具体反驳(禁空评级,自动迁移);历史审计卡片默认折叠; LLM主导+五本书心法）",
   "permissions": [
     "activeTab",
     "storage",
